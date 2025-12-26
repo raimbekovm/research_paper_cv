@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data (не коммитим сырые данные)
+data/images/**/*.jpg
+data/images/**/*.png
+data/pm25/*.json
+data/weather/*.json
+data/metadata/*.txt
+
+# Но сохраняем структуру папок
+!data/images/.gitkeep
+!data/pm25/.gitkeep
+!data/weather/.gitkeep
+!data/metadata/.gitkeep
+
+# Model checkpoints
+*.pth
+*.ckpt
+*.h5
+models/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+
+# API keys (ВАЖНО!)
+.env
+*_api_key.txt
+secrets.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/

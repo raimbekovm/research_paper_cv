@@ -1,0 +1,27 @@
+# Базовые зависимости для проекта PM2.5 estimation
+
+# Computer Vision
+opencv-python>=4.8.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+pillow>=10.0.0
+
+# API для данных PM2.5 и погоды
+requests>=2.31.0
+
+# Visualisation
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Metrics and utilities
+scikit-learn>=1.3.0
+tqdm>=4.65.0
+
+# Optional: для работы с HLS-потоками
+# ffmpeg-python>=0.2.0
