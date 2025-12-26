@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 from camera_config import CAMERAS, get_recommended_cameras
+from frame_quality import get_default_filter
 
 
 class MultiCameraCapture:
@@ -28,6 +29,9 @@ class MultiCameraCapture:
         self.output_dir = output_dir
         self.daylight_start = daylight_start
         self.daylight_end = daylight_end
+
+        # Фильтр качества для поворотных камер
+        self.quality_filter = get_default_filter()
 
         # Создаём директории для каждой камеры
         for camera_id in cameras.keys():
@@ -73,6 +77,19 @@ class MultiCameraCapture:
                     "error": "Не удалось захватить кадр"
                 }
 
+            # Проверяем качество кадра (для камер с фильтрацией)
+            quality_metrics = None
+            if camera_info.get("require_quality_filter", False):
+                is_useful, quality_metrics = self.quality_filter.filter_frame(frame)
+                if not is_useful:
+                    return {
+                        "camera_id": camera_id,
+                        "success": False,
+                        "error": f"Кадр отклонён фильтром: {quality_metrics['reason']}",
+                        "filtered": True,
+                        "quality_metrics": quality_metrics
+                    }
+
             # Формируем путь к файлу
             timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')
             filename = f"{camera_id}_{timestamp_str}.jpg"
@@ -82,15 +99,22 @@ class MultiCameraCapture:
             # Сохраняем изображение
             cv2.imwrite(filepath, frame)
 
-            return {
+            result = {
                 "camera_id": camera_id,
                 "camera_name": camera_info["name"],
                 "success": True,
                 "filepath": filepath,
                 "timestamp": timestamp,
                 "resolution": (frame.shape[1], frame.shape[0]),
-                "coordinates": camera_info["coordinates"]
+                "coordinates": camera_info["coordinates"],
+                "filtered": False
             }
+
+            # Добавляем метрики качества если камера использует фильтрацию
+            if quality_metrics:
+                result["quality_metrics"] = quality_metrics
+
+            return result
 
         except Exception as e:
             return {
@@ -135,13 +159,27 @@ class MultiCameraCapture:
                     print(f"✅ {result['camera_name']}")
                     print(f"   Файл: {result['filepath']}")
                     print(f"   Разрешение: {result['resolution'][0]}x{result['resolution'][1]}")
+                    # Показываем метрики качества если есть
+                    if "quality_metrics" in result:
+                        qm = result["quality_metrics"]
+                        print(f"   Качество: яркость={qm['brightness']:.0f}, контраст={qm['contrast']:.0f}, резкость={qm['sharpness']:.0f}")
                 else:
-                    print(f"❌ {result['camera_id']}")
-                    print(f"   Ошибка: {result['error']}")
+                    # Отфильтрованный кадр vs ошибка
+                    if result.get("filtered", False):
+                        print(f"🔍 {result['camera_id']} - кадр отфильтрован")
+                        print(f"   Причина: {result['error'].split(': ')[1]}")
+                    else:
+                        print(f"❌ {result['camera_id']}")
+                        print(f"   Ошибка: {result['error']}")
 
         print("-" * 80)
         successful = sum(1 for r in results if r["success"])
-        print(f"📊 Результат: {successful}/{len(results)} камер успешно")
+        filtered = sum(1 for r in results if r.get("filtered", False))
+        print(f"📊 Результат: {successful}/{len(results)} камер успешно", end="")
+        if filtered > 0:
+            print(f" (🔍 отфильтровано: {filtered})")
+        else:
+            print()
 
         return results
 
