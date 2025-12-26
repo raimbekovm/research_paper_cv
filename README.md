@@ -116,14 +116,17 @@ python src/fetch_pm25_data.py
 
 ## Cameras
 
-We use 4 fixed webcams in Bishkek:
+We use 5 webcams in Bishkek (4 fixed + 1 rotating with quality filtering):
 
-| Camera ID | Location | Coordinates | Resolution |
-|-----------|----------|-------------|------------|
-| ala_too_square | Ala-Too Square | 42.875576, 74.603629 | 1280x720 |
-| ala_too_square_2 | Ala-Too Square (Alt) | 42.875767, 74.604619 | 1920x1080 |
-| bishkek_panorama | City Panorama | TBD | 1920x1080 |
-| sovmin | Sovmin District | 42.804394, 74.587977 | 1920x1080 |
+| Camera ID | Location | Coordinates | Resolution | Filtering |
+|-----------|----------|-------------|------------|-----------|
+| ala_too_square | Ala-Too Square | 42.875576, 74.603629 | 1280x720 | No |
+| ala_too_square_2 | Ala-Too Square (Alt) | 42.875767, 74.604619 | 1920x1080 | No |
+| bishkek_panorama | City Panorama | TBD | 1920x1080 | No |
+| sovmin | Sovmin District | 42.804394, 74.587977 | 1920x1080 | No |
+| kt_center | KT Center (rotating) | 42.874689, 74.612241 | 1920x1080 | Yes (~75% pass) |
+
+**Note:** The rotating camera (kt_center) automatically filters frames by quality (brightness, contrast, sharpness). Only useful frames showing clear city views are saved.
 
 Source: [Kyrgyztelekom Online Cameras](https://online.kt.kg)
 
@@ -172,10 +175,12 @@ Source: [Kyrgyztelekom Online Cameras](https://online.kt.kg)
 
 ## Current Status
 
-- [x] Camera configuration and testing
+- [x] Camera configuration and testing (5 cameras)
 - [x] Automated frame capture system
+- [x] Frame quality filtering (for rotating camera)
+- [x] Daylight-only collection mode
 - [x] PM2.5 data collection framework
-- [ ] Continuous data collection (in progress)
+- [ ] Continuous data collection (ready to start)
 - [ ] Dataset preparation
 - [ ] Model training
 - [ ] Paper writing
