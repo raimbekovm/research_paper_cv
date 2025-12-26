@@ -1,11 +1,12 @@
 """
 Автоматический сбор данных со всех камер Бишкека
 Использует многопоточность для одновременного захвата кадров
+ВАЖНО: Собирает только в дневное время (визуальные признаки PM2.5 видны только днём)
 """
 
 import cv2
 import os
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
@@ -15,19 +16,33 @@ from camera_config import CAMERAS, get_recommended_cameras
 class MultiCameraCapture:
     """Класс для одновременного захвата кадров с нескольких камер"""
 
-    def __init__(self, cameras, output_dir="data/images"):
+    def __init__(self, cameras, output_dir="data/images", daylight_start=8, daylight_end=18):
         """
         Args:
             cameras: dict с данными камер из camera_config.py
             output_dir: Базовая директория для сохранения изображений
+            daylight_start: Начало светового дня (час, 0-23)
+            daylight_end: Конец светового дня (час, 0-23)
         """
         self.cameras = cameras
         self.output_dir = output_dir
+        self.daylight_start = daylight_start
+        self.daylight_end = daylight_end
 
         # Создаём директории для каждой камеры
         for camera_id in cameras.keys():
             camera_dir = os.path.join(output_dir, camera_id)
             os.makedirs(camera_dir, exist_ok=True)
+
+    def is_daylight(self):
+        """
+        Проверяет, является ли текущее время дневным
+
+        Returns:
+            bool: True если сейчас день, False если ночь
+        """
+        current_hour = datetime.now().hour
+        return self.daylight_start <= current_hour < self.daylight_end
 
     def capture_single_camera(self, camera_id, camera_info, timestamp):
         """
@@ -130,13 +145,14 @@ class MultiCameraCapture:
 
         return results
 
-    def collect_continuous(self, interval_minutes=60, duration_hours=None):
+    def collect_continuous(self, interval_minutes=60, duration_hours=None, skip_night=True):
         """
         Непрерывный сбор данных с заданным интервалом
 
         Args:
             interval_minutes: Интервал между сборами в минутах
             duration_hours: Длительность сбора в часах (None = бесконечно)
+            skip_night: Пропускать ночное время (рекомендуется True)
         """
         print("=" * 80)
         print("🚀 АВТОМАТИЧЕСКИЙ СБОР ДАННЫХ")
@@ -148,17 +164,49 @@ class MultiCameraCapture:
         else:
             print(f"⏰ Длительность: бесконечно (Ctrl+C для остановки)")
         print(f"💾 Директория: {self.output_dir}")
+
+        if skip_night:
+            print(f"☀️  Дневной режим: {self.daylight_start}:00 - {self.daylight_end}:00")
+            print(f"🌙 Ночное время: пропускается (нет визуальных признаков PM2.5)")
+        else:
+            print(f"⚠️  Режим 24/7: сбор днём и ночью")
+
         print("=" * 80)
         print()
 
         start_time = time.time()
         collection_count = 0
+        skipped_count = 0
 
         try:
             while True:
+                # Проверяем, светлое ли время суток
+                if skip_night and not self.is_daylight():
+                    current_time = datetime.now()
+
+                    # Вычисляем время до следующего рассвета
+                    next_daylight_hour = self.daylight_start
+                    if current_time.hour >= self.daylight_end:
+                        # Если уже вечер, ждём до утра
+                        hours_until_daylight = (24 - current_time.hour) + next_daylight_hour
+                    else:
+                        # Если раннее утро
+                        hours_until_daylight = next_daylight_hour - current_time.hour
+
+                    print(f"\n🌙 Сейчас {current_time.strftime('%H:%M')} - ночное время")
+                    print(f"💤 Пропускаем сбор (визуальные признаки не видны)")
+                    print(f"⏰ Следующий сбор в ~{next_daylight_hour}:00")
+                    print(f"⏳ Ожидание ~{hours_until_daylight} часов...")
+
+                    skipped_count += 1
+
+                    # Спим до следующего интервала
+                    time.sleep(interval_minutes * 60)
+                    continue
+
                 collection_count += 1
                 print(f"\n{'='*80}")
-                print(f"📸 Сбор #{collection_count}")
+                print(f"📸 Сбор #{collection_count} (☀️  Дневное время)")
                 print(f"{'='*80}")
 
                 # Захватываем кадры со всех камер
@@ -172,17 +220,22 @@ class MultiCameraCapture:
                     elapsed_hours = (time.time() - start_time) / 3600
                     if elapsed_hours >= duration_hours:
                         print(f"\n✅ Сбор завершён! Всего сборов: {collection_count}")
+                        if skip_night:
+                            print(f"🌙 Пропущено ночных интервалов: {skipped_count}")
                         break
 
                 # Ждём до следующего сбора
+                next_collection_time = datetime.fromtimestamp(time.time() + interval_minutes * 60)
                 print(f"\n⏳ Следующий сбор через {interval_minutes} минут...")
-                print(f"⏰ Следующий сбор: {datetime.fromtimestamp(time.time() + interval_minutes * 60).strftime('%H:%M:%S')}")
+                print(f"⏰ Следующий сбор: {next_collection_time.strftime('%H:%M:%S')}")
                 print("=" * 80)
                 time.sleep(interval_minutes * 60)
 
         except KeyboardInterrupt:
             print(f"\n\n⚠️  Сбор остановлен пользователем")
             print(f"📊 Всего сборов: {collection_count}")
+            if skip_night:
+                print(f"🌙 Пропущено ночных интервалов: {skipped_count}")
 
     def _save_metadata(self, results, collection_count):
         """Сохранение метаданных сбора"""
@@ -219,6 +272,12 @@ def main():
                         help='Использовать ВСЕ камеры (включая нерекомендованные)')
     parser.add_argument('--output', type=str, default='data/images',
                         help='Директория для сохранения (default: data/images)')
+    parser.add_argument('--daylight-start', type=int, default=8,
+                        help='Начало светового дня, час (default: 8)')
+    parser.add_argument('--daylight-end', type=int, default=18,
+                        help='Конец светового дня, час (default: 18)')
+    parser.add_argument('--24-7', action='store_true',
+                        help='Собирать данные 24/7 (включая ночь, не рекомендуется)')
 
     args = parser.parse_args()
 
@@ -231,15 +290,22 @@ def main():
         print("✅ Используются только рекомендованные камеры")
 
     # Создаём объект для сбора
-    collector = MultiCameraCapture(cameras, output_dir=args.output)
+    collector = MultiCameraCapture(
+        cameras,
+        output_dir=args.output,
+        daylight_start=args.daylight_start,
+        daylight_end=args.daylight_end
+    )
 
     if args.mode == 'test':
         print("\n🧪 РЕЖИМ ТЕСТИРОВАНИЯ\n")
         collector.capture_all_cameras()
     else:
+        skip_night = not args.__dict__.get('24_7', False)
         collector.collect_continuous(
             interval_minutes=args.interval,
-            duration_hours=args.duration
+            duration_hours=args.duration,
+            skip_night=skip_night
         )
 
 

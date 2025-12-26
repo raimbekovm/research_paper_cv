@@ -74,17 +74,35 @@ python src/collect_data.py --mode test
 
 ### 2. Start Continuous Data Collection
 
-Collect frames every hour for 24 hours:
+Collect frames every hour during daylight (8:00-18:00):
 
 ```bash
-python src/collect_data.py --mode continuous --interval 60 --duration 24
+python src/collect_data.py --mode continuous --interval 60
 ```
+
+**Important:** By default, collection runs only during daylight hours (8:00-18:00) because visual haze features are not visible at night.
 
 Options:
 - `--interval N`: Capture interval in minutes (default: 60)
 - `--duration N`: Duration in hours (omit for infinite)
+- `--daylight-start H`: Daylight start hour (default: 8)
+- `--daylight-end H`: Daylight end hour (default: 18)
+- `--24-7`: Collect 24/7 including night (not recommended)
 - `--all-cameras`: Include all cameras (including rotating camera)
 - `--output DIR`: Output directory (default: data/images)
+
+**Examples:**
+
+```bash
+# Collect every hour during daylight (8:00-18:00)
+python src/collect_data.py --mode continuous --interval 60
+
+# Collect with custom daylight hours (winter: shorter days)
+python src/collect_data.py --mode continuous --interval 60 --daylight-start 9 --daylight-end 17
+
+# Collect 24/7 (not recommended - nighttime images lack visual features)
+python src/collect_data.py --mode continuous --interval 60 --24-7
+```
 
 ### 3. Collect PM2.5 Data
 
