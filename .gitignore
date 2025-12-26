@@ -69,6 +69,9 @@ logs/
 *_api_key.txt
 secrets.json
 
+# AI assistant internal files (не коммитить!)
+PROJECT_INFO.md
+
 # OS
 .DS_Store
 Thumbs.db
