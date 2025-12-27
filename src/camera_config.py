@@ -19,9 +19,12 @@ CAMERAS = {
         "coordinates": (42.875767, 74.604619),
         "viewing_direction": "~90° E",
         "viewing_angle": "horizontal-wide",
-        "recommended": True,
+        "recommended": False,  # ⚠️ ПЛОХАЯ для атмосферной видимости
         "require_quality_filter": False,
-        "description": "Вид на восток вдоль дороги, здания вдали"
+        "pm25_sensor_distance_km": 0.07,
+        "nearest_sensor": "Chuy Avenue",
+        "visual_quality_score": 3,  # Слабо - слишком много переднего плана
+        "description": "ПРОБЛЕМА: слишком много переднего плана (площадь, дорога, памятник, люди), мало дальних объектов, мало неба. Датчик в 70 м - хорошо, но визуальное качество для атмосферной видимости - ПЛОХОЕ. Не рекомендуется."
     },
     "bishkek_panorama": {
         "name": "Бишкек Панорама",
@@ -29,9 +32,12 @@ CAMERAS = {
         "coordinates": (42.799197, 74.645485),
         "viewing_direction": "~330° NW",
         "viewing_angle": "panoramic-wide",
-        "recommended": True,
+        "recommended": True,  # ⭐⭐⭐ ЛУЧШАЯ КАМЕРА для PM2.5 estimation
         "require_quality_filter": False,
-        "description": "Панорамный вид на весь город, очень широкий угол обзора"
+        "pm25_sensor_distance_km": 7.24,
+        "nearest_sensor": "Ак-Орго (Ak-Orgo)",
+        "visual_quality_score": 10,  # Идеальная панорама для атмосферной видимости
+        "description": "ИДЕАЛЬНАЯ панорама на весь город - атмосферная дымка видна отлично, 50% неба, depth 10+ км. Расстояние до датчика 7.24 км НЕ КРИТИЧНО - видимость интегрируется вдоль всей линии зрения!"
     },
     "sovmin": {
         "name": "Бишкек Совмин",
@@ -39,9 +45,12 @@ CAMERAS = {
         "coordinates": (42.804394, 74.587977),
         "viewing_direction": "~45° NE",
         "viewing_angle": "elevated-wide",
-        "recommended": True,
+        "recommended": True,  # ⭐⭐⭐ ОТЛИЧНАЯ КАМЕРА для PM2.5 estimation
         "require_quality_filter": False,
-        "description": "Вид на северо-восток на жилые районы, высокая точка съёмки"
+        "pm25_sensor_distance_km": 5.07,
+        "nearest_sensor": "Ак-Орго (Ak-Orgo)",
+        "visual_quality_score": 9,  # Отличный вид на южный район
+        "description": "ОТЛИЧНАЯ панорама на весь южный район города - атмосферная дымка видна вдали, много неба, depth 5+ км. Расстояние до датчика 5.07 км приемлемо для городского масштаба PM2.5"
     },
     "kt_center": {
         "name": "Кыргызтелеком Центр",
@@ -49,9 +58,12 @@ CAMERAS = {
         "coordinates": (42.874689, 74.612241),
         "viewing_direction": "variable (rotating)",
         "viewing_angle": "rotating",
-        "recommended": True,
+        "recommended": True,  # ⭐⭐ ХОРОШАЯ КАМЕРА (с фильтрацией)
         "require_quality_filter": True,
-        "description": "Поворотная камера, меняет направление (требует фильтрацию ~75% кадров полезные)"
+        "pm25_sensor_distance_km": 0.01,
+        "nearest_sensor": "US Embassy Bishkek",
+        "visual_quality_score": 7,  # Хорошо, но много близких зданий
+        "description": "Поворотная камера с фильтрацией (~75% кадров полезные). Датчик в 10 м - отлично. Визуально: горы вдали видны, но много близких зданий в кадре. Приемлемо для ML."
     }
 }
 

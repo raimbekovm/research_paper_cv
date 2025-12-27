@@ -1,0 +1,197 @@
+{
+  "sensors": [
+    {
+      "name": "US Embassy Bishkek",
+      "latitude": 42.8746,
+      "longitude": 74.6122,
+      "source": "US Embassy / AQICN",
+      "url": "https://aqicn.org/city/kyrgyzstan/bishkek/us-embassy/"
+    },
+    {
+      "name": "Chuy Avenue",
+      "latitude": 42.8756,
+      "longitude": 74.6038,
+      "source": "AQICN",
+      "url": "https://aqicn.org/station/kyrgyzstan-bishkek-chuy-avenue/"
+    },
+    {
+      "name": "UN House Bishkek",
+      "latitude": 42.8757,
+      "longitude": 74.6036,
+      "source": "Purple Air",
+      "url": "https://aqicn.org/station/@93670/"
+    },
+    {
+      "name": "Ак-Орго (Ak-Orgo)",
+      "latitude": 42.85,
+      "longitude": 74.59,
+      "source": "AQICN",
+      "url": "https://aqicn.org/station/kyrgyzstan/bishkek/ак-орго"
+    }
+  ],
+  "distances": {
+    "ala_too_square_2": [
+      {
+        "sensor_name": "Chuy Avenue",
+        "distance_km": 0.06927328475093941,
+        "sensor_coords": [
+          42.8756,
+          74.6038
+        ]
+      },
+      {
+        "sensor_name": "UN House Bishkek",
+        "distance_km": 0.08336890524311578,
+        "sensor_coords": [
+          42.8757,
+          74.6036
+        ]
+      },
+      {
+        "sensor_name": "US Embassy Bishkek",
+        "distance_km": 0.6312410846097545,
+        "sensor_coords": [
+          42.8746,
+          74.6122
+        ]
+      },
+      {
+        "sensor_name": "Ак-Орго (Ak-Orgo)",
+        "distance_km": 3.103035806710752,
+        "sensor_coords": [
+          42.85,
+          74.59
+        ]
+      }
+    ],
+    "bishkek_panorama": [
+      {
+        "sensor_name": "Ак-Орго (Ak-Orgo)",
+        "distance_km": 7.237937475316003,
+        "sensor_coords": [
+          42.85,
+          74.59
+        ]
+      },
+      {
+        "sensor_name": "US Embassy Bishkek",
+        "distance_km": 8.812746500204547,
+        "sensor_coords": [
+          42.8746,
+          74.6122
+        ]
+      },
+      {
+        "sensor_name": "Chuy Avenue",
+        "distance_km": 9.150309889791115,
+        "sensor_coords": [
+          42.8756,
+          74.6038
+        ]
+      },
+      {
+        "sensor_name": "UN House Bishkek",
+        "distance_km": 9.16669685263493,
+        "sensor_coords": [
+          42.8757,
+          74.6036
+        ]
+      }
+    ],
+    "sovmin": [
+      {
+        "sensor_name": "Ак-Орго (Ak-Orgo)",
+        "distance_km": 5.073838698257576,
+        "sensor_coords": [
+          42.85,
+          74.59
+        ]
+      },
+      {
+        "sensor_name": "Chuy Avenue",
+        "distance_km": 8.022163155045163,
+        "sensor_coords": [
+          42.8756,
+          74.6038
+        ]
+      },
+      {
+        "sensor_name": "UN House Bishkek",
+        "distance_km": 8.030535210701638,
+        "sensor_coords": [
+          42.8757,
+          74.6036
+        ]
+      },
+      {
+        "sensor_name": "US Embassy Bishkek",
+        "distance_km": 8.052511673085238,
+        "sensor_coords": [
+          42.8746,
+          74.6122
+        ]
+      }
+    ],
+    "kt_center": [
+      {
+        "sensor_name": "US Embassy Bishkek",
+        "distance_km": 0.010445103934470389,
+        "sensor_coords": [
+          42.8746,
+          74.6122
+        ]
+      },
+      {
+        "sensor_name": "Chuy Avenue",
+        "distance_km": 0.6952583612549267,
+        "sensor_coords": [
+          42.8756,
+          74.6038
+        ]
+      },
+      {
+        "sensor_name": "UN House Bishkek",
+        "distance_km": 0.713053743849607,
+        "sensor_coords": [
+          42.8757,
+          74.6036
+        ]
+      },
+      {
+        "sensor_name": "Ак-Орго (Ak-Orgo)",
+        "distance_km": 3.2897842315927157,
+        "sensor_coords": [
+          42.85,
+          74.59
+        ]
+      }
+    ]
+  },
+  "recommendations": {
+    "ala_too_square_2": {
+      "sensor": "Chuy Avenue",
+      "distance_km": 0.06927328475093941,
+      "quality": "✅ Отличная пара",
+      "use_for_paper": true
+    },
+    "bishkek_panorama": {
+      "sensor": "Ак-Орго (Ak-Orgo)",
+      "distance_km": 7.237937475316003,
+      "quality": "🔴 НЕ РЕКОМЕНДУЕТСЯ (слишком далеко)",
+      "use_for_paper": false
+    },
+    "sovmin": {
+      "sensor": "Ак-Орго (Ak-Orgo)",
+      "distance_km": 5.073838698257576,
+      "quality": "🔴 НЕ РЕКОМЕНДУЕТСЯ (слишком далеко)",
+      "use_for_paper": false
+    },
+    "kt_center": {
+      "sensor": "US Embassy Bishkek",
+      "distance_km": 0.010445103934470389,
+      "quality": "✅ Отличная пара",
+      "use_for_paper": true
+    }
+  },
+  "generated_at": "{'response': []}"
+}

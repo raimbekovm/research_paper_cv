@@ -1,6 +1,6 @@
 """
 Скрипт для получения данных PM2.5 и метеоданных для Бишкека
-Использует OpenAQ и OpenWeatherMap API
+Использует IQAir, OpenWeatherMap и OpenAQ API
 """
 
 import requests
@@ -8,6 +8,11 @@ import json
 from datetime import datetime, timedelta
 import time
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Загрузка API ключей из .env файла
+load_dotenv()
 
 
 class PM25DataCollector:
@@ -22,6 +27,29 @@ class PM25DataCollector:
             "lat": 42.8746,
             "lon": 74.5698
         }
+
+    @staticmethod
+    def aqi_to_ugm3(aqi):
+        """
+        Конвертация US AQI в µg/m³ для PM2.5
+        Формула из EPA (Environmental Protection Agency)
+        """
+        if aqi is None:
+            return None
+
+        # Breakpoints для PM2.5
+        if aqi <= 50:
+            return aqi * 12.0 / 50
+        elif aqi <= 100:
+            return 12.1 + (aqi - 51) * 23.9 / 49
+        elif aqi <= 150:
+            return 35.5 + (aqi - 101) * 19.4 / 49
+        elif aqi <= 200:
+            return 55.5 + (aqi - 151) * 94.4 / 49
+        elif aqi <= 300:
+            return 150.5 + (aqi - 201) * 99.4 / 99
+        else:
+            return 250.5 + (aqi - 301) * 99.9 / 99
 
     def fetch_openaq_current(self):
         """
@@ -91,12 +119,12 @@ class PM25DataCollector:
             print("   Получите бесплатный ключ: https://www.iqair.com/air-pollution-data-api")
             return None
 
-        url = "http://api.airvisual.com/v2/city"
+        # Попробуем через координаты (nearest city)
+        url = "http://api.airvisual.com/v2/nearest_city"
 
         params = {
-            "city": "Bishkek",
-            "state": "Chuy",
-            "country": "Kyrgyzstan",
+            "lat": self.bishkek_coords["lat"],
+            "lon": self.bishkek_coords["lon"],
             "key": api_key
         }
 
@@ -112,11 +140,18 @@ class PM25DataCollector:
                     pollution = current["pollution"]
                     weather = current["weather"]
 
+                    pm25_aqi = pollution.get("aqius")
+                    pm25_conc = pollution.get("p2", {}).get("conc")
+
+                    # Если концентрация не пришла - конвертируем из AQI
+                    if pm25_conc is None and pm25_aqi is not None:
+                        pm25_conc = self.aqi_to_ugm3(pm25_aqi)
+
                     result = {
                         "source": "IQAir",
                         "city": "Bishkek",
-                        "pm25": pollution.get("aqius"),  # US AQI
-                        "pm25_concentration": pollution.get("p2", {}).get("conc"),  # µg/m³
+                        "pm25_aqi": pm25_aqi,  # US AQI
+                        "pm25": pm25_conc,  # µg/m³ (основное значение)
                         "temperature": weather.get("tp"),
                         "humidity": weather.get("hu"),
                         "pressure": weather.get("pr"),
@@ -125,7 +160,7 @@ class PM25DataCollector:
                         "fetched_at": datetime.now().isoformat()
                     }
 
-                    print(f"✅ PM2.5: {result['pm25_concentration']} µg/m³")
+                    print(f"✅ PM2.5: {result['pm25']:.1f} µg/m³ (AQI: {pm25_aqi})")
                     print(f"   Температура: {result['temperature']}°C")
                     print(f"   Влажность: {result['humidity']}%")
 
@@ -265,25 +300,30 @@ class PM25DataCollector:
 
 
 def main():
-    """Пример использования"""
+    """Запуск сбора данных PM2.5"""
     collector = PM25DataCollector()
 
-    # Для тестирования - без API ключей
-    print("⚠️  ВНИМАНИЕ: Для полного функционала нужны API ключи (бесплатные):\n")
-    print("1. IQAir: https://www.iqair.com/air-pollution-data-api")
-    print("2. OpenWeatherMap: https://openweathermap.org/api")
-    print("\nВставьте ключи в переменные ниже и раскомментируйте строки.\n")
-    print("=" * 80)
+    # Загрузка API ключей из .env файла
+    iqair_key = os.getenv('IQAIR_API_KEY')
+    openweather_key = os.getenv('OPENWEATHER_API_KEY')
+
+    # Проверка наличия ключей
+    if not iqair_key or iqair_key == 'your_iqair_api_key_here':
+        print("⚠️  ВНИМАНИЕ: IQAir API ключ не найден в .env файле")
+        print("   Добавьте: IQAIR_API_KEY=ваш_ключ")
+        iqair_key = None
+
+    if not openweather_key or openweather_key == 'your_openweather_api_key_here':
+        print("⚠️  ВНИМАНИЕ: OpenWeatherMap API ключ не найден в .env файле")
+        print("   Добавьте: OPENWEATHER_API_KEY=ваш_ключ")
+        openweather_key = None
+
     print()
 
-    # Раскомментируйте и вставьте ваши API ключи:
-    # IQAIR_API_KEY = "your_iqair_api_key_here"
-    # OPENWEATHER_API_KEY = "your_openweather_api_key_here"
-
-    # Сбор данных (сейчас работает только OpenAQ без ключа)
+    # Сбор данных
     collector.collect_all(
-        iqair_key=None,  # Замените на IQAIR_API_KEY
-        openweather_key=None  # Замените на OPENWEATHER_API_KEY
+        iqair_key=iqair_key,
+        openweather_key=openweather_key
     )
 
 
