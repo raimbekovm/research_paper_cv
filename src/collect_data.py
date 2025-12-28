@@ -26,8 +26,9 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from src.camera_config import Camera, get_active_cameras, get_camera, CAMERAS, get_recommended_cameras
+from src.camera_config import Camera, get_active_cameras, get_night_cameras, get_camera, CAMERAS, get_recommended_cameras
 from src.frame_quality import QualityAssessor, QualityMetrics, QualityThresholds
+from src.fetch_pm25_data import PM25Collector, PM25Reading, WeatherData
 from src.utils.logging import get_logger
 from src.utils.io import ensure_dir, save_json
 
@@ -112,22 +113,70 @@ class DataCollector:
         cameras: Optional[Dict[str, Camera]] = None,
         config: Optional[CollectionConfig] = None,
     ):
-        self.cameras = cameras or get_active_cameras()
+        self.day_cameras = cameras or get_active_cameras()
+        self.night_cameras = get_night_cameras()
+        self.cameras = self.day_cameras  # Default to day cameras
         self.config = config or CollectionConfig()
         self.quality_assessor = QualityAssessor(QualityThresholds.default())
+        self.pm25_collector = PM25Collector(output_dir=self.config.output_dir / "pm25")
 
-        # Create output directories
-        for camera_id in self.cameras.keys():
+        # Create output directories for all cameras
+        all_camera_ids = set(self.day_cameras.keys()) | set(self.night_cameras.keys())
+        for camera_id in all_camera_ids:
             ensure_dir(self.config.output_dir / camera_id)
 
         ensure_dir(self.config.output_dir / "metadata")
 
-        logger.info(f"Initialized DataCollector with {len(self.cameras)} cameras")
+        logger.info(f"Initialized DataCollector: {len(self.day_cameras)} day cameras, {len(self.night_cameras)} night cameras")
 
     def is_daylight(self) -> bool:
         """Check if current time is within daylight hours."""
         current_hour = datetime.now().hour
         return self.config.daylight_start <= current_hour < self.config.daylight_end
+
+    def get_current_cameras(self) -> Dict[str, Camera]:
+        """Get appropriate cameras for current time of day."""
+        if self.is_daylight():
+            return self.day_cameras
+        else:
+            return self.night_cameras
+
+    def fetch_environmental_data(self) -> Optional[dict]:
+        """Fetch current PM2.5 and weather data from all stations."""
+        try:
+            result = self.pm25_collector.fetch_all(save=False)
+            if result.best_reading:
+                reading = result.best_reading
+                env_data = {
+                    "pm25": reading.value,
+                    "aqi": reading.aqi,
+                    "source": reading.source.value if reading.source else None,
+                    "weather": reading.weather.to_dict() if reading.weather else None,
+                    "timestamp": reading.timestamp.isoformat() if reading.timestamp else None,
+                }
+
+                # Include multi-station data if available
+                if result.multi_station:
+                    ms = result.multi_station
+                    env_data["stations"] = {
+                        "count": ms.count,
+                        "pm25_mean": round(ms.pm25_mean, 1),
+                        "pm25_median": round(ms.pm25_median, 1),
+                        "pm25_min": round(ms.pm25_min, 1),
+                        "pm25_max": round(ms.pm25_max, 1),
+                        "pm25_std": round(ms.pm25_std, 1),
+                        "weather_iqair": {
+                            "temperature": round(ms.temperature_mean, 1) if ms.temperature_mean else None,
+                            "humidity": round(ms.humidity_mean, 1) if ms.humidity_mean else None,
+                            "wind_speed": round(ms.wind_speed_mean, 1) if ms.wind_speed_mean else None,
+                        },
+                        "readings": [r.to_dict() for r in ms.readings],
+                    }
+
+                return env_data
+        except Exception as e:
+            logger.warning(f"Failed to fetch environmental data: {e}")
+        return None
 
     def _capture_single(
         self,
@@ -222,22 +271,30 @@ class DataCollector:
             if cap is not None:
                 cap.release()
 
-    def collect_once(self) -> List[CaptureResult]:
+    def collect_once(self, fetch_env_data: bool = True) -> Tuple[List[CaptureResult], Optional[dict]]:
         """
-        Collect frames from all cameras once.
+        Collect frames from appropriate cameras and environmental data.
+
+        Args:
+            fetch_env_data: Whether to fetch PM2.5 and weather data
 
         Returns:
-            List of CaptureResult objects
+            Tuple of (capture results, environmental data)
         """
         timestamp = datetime.now()
         results = []
 
-        logger.info(f"Starting capture from {len(self.cameras)} cameras")
+        # Select cameras based on time of day
+        current_cameras = self.get_current_cameras()
+        is_day = self.is_daylight()
+        mode = "day" if is_day else "night"
+
+        logger.info(f"Starting {mode} capture from {len(current_cameras)} cameras")
 
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             futures = {
                 executor.submit(self._capture_single, cam_id, cam, timestamp): cam_id
-                for cam_id, cam in self.cameras.items()
+                for cam_id, cam in current_cameras.items()
             }
 
             for future in as_completed(futures):
@@ -255,18 +312,34 @@ class DataCollector:
         filtered = sum(1 for r in results if r.filtered)
         logger.info(f"Collection complete: {successful}/{len(results)} successful, {filtered} filtered")
 
-        return results
+        # Fetch environmental data
+        env_data = None
+        if fetch_env_data:
+            env_data = self.fetch_environmental_data()
+            if env_data:
+                logger.info(f"PM2.5: {env_data['pm25']:.1f} µg/m³ (source: {env_data['source']})")
 
-    def _save_metadata(self, results: List[CaptureResult], collection_num: int) -> None:
+        return results, env_data
+
+    def _save_metadata(self, results: List[CaptureResult], collection_num: int, env_data: Optional[dict] = None) -> None:
         """Save collection metadata to JSON file."""
         timestamp = datetime.now()
+        is_day = self.is_daylight()
+
         metadata = {
             "collection_number": collection_num,
             "timestamp": timestamp.isoformat(),
+            "is_daylight": is_day,
+            "mode": "day" if is_day else "night",
             "cameras_total": len(results),
             "cameras_successful": sum(1 for r in results if r.success),
             "cameras_filtered": sum(1 for r in results if r.filtered),
             "results": [r.to_dict() for r in results],
+            "pm25": env_data.get("pm25") if env_data else None,
+            "aqi": env_data.get("aqi") if env_data else None,
+            "pm25_source": env_data.get("source") if env_data else None,
+            "weather": env_data.get("weather") if env_data else None,
+            "stations": env_data.get("stations") if env_data else None,
         }
 
         filename = f"collection_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
@@ -277,7 +350,8 @@ class DataCollector:
         """
         Run continuous data collection.
 
-        Collects data at regular intervals, optionally skipping nighttime.
+        Collects data at regular intervals with PM2.5 and weather data.
+        Uses all cameras during day, only night-capable cameras at night.
         Runs until duration_hours is reached or interrupted.
         """
         cfg = self.config
@@ -285,16 +359,12 @@ class DataCollector:
         print("=" * 80)
         print("AIRVISION DATA COLLECTION")
         print("=" * 80)
-        print(f"Cameras: {len(self.cameras)}")
+        print(f"Day cameras: {len(self.day_cameras)} | Night cameras: {len(self.night_cameras)}")
         print(f"Interval: {cfg.interval_minutes} minutes")
         print(f"Duration: {cfg.duration_hours or 'infinite'} hours")
         print(f"Output: {cfg.output_dir}")
-
-        if cfg.daylight_only:
-            print(f"Daylight mode: {cfg.daylight_start}:00 - {cfg.daylight_end}:00")
-        else:
-            print("24/7 mode: collecting day and night")
-
+        print(f"Daylight hours: {cfg.daylight_start}:00 - {cfg.daylight_end}:00")
+        print(f"PM2.5 + Weather: enabled")
         print("=" * 80)
 
         start_time = time.time()
@@ -302,25 +372,21 @@ class DataCollector:
 
         try:
             while True:
-                # Check daylight
-                if cfg.daylight_only and not self.is_daylight():
-                    current = datetime.now()
-                    logger.info(f"Nighttime ({current.strftime('%H:%M')}), skipping")
-                    print(f"\n[{current.strftime('%H:%M')}] Nighttime - skipping collection")
-                    time.sleep(cfg.interval_minutes * 60)
-                    continue
-
                 collection_count += 1
+                is_day = self.is_daylight()
+                mode = "DAY" if is_day else "NIGHT"
+                current_cameras = self.get_current_cameras()
 
                 print(f"\n{'='*80}")
-                print(f"Collection #{collection_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Collection #{collection_count} [{mode}] at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Cameras: {list(current_cameras.keys())}")
                 print("=" * 80)
 
-                # Capture from all cameras
-                results = self.collect_once()
-                self._save_metadata(results, collection_count)
+                # Capture from cameras + fetch environmental data
+                results, env_data = self.collect_once()
+                self._save_metadata(results, collection_count, env_data)
 
-                # Print summary
+                # Print image results
                 successful = sum(1 for r in results if r.success)
                 filtered = sum(1 for r in results if r.filtered)
 
@@ -336,11 +402,25 @@ class DataCollector:
                     else:
                         print(f"  [FAIL] {r.camera_name}: {r.error}")
 
-                print(f"\nResult: {successful}/{len(results)} successful", end="")
+                print(f"\nImages: {successful}/{len(results)} successful", end="")
                 if filtered:
                     print(f" ({filtered} filtered)")
                 else:
                     print()
+
+                # Print environmental data
+                if env_data:
+                    pm25 = env_data.get('pm25')
+                    aqi = env_data.get('aqi')
+                    weather = env_data.get('weather') or {}
+                    temp = weather.get('temperature')
+                    humidity = weather.get('humidity')
+
+                    print(f"PM2.5: {pm25:.1f} µg/m³ (AQI: {aqi})" if pm25 else "PM2.5: N/A")
+                    if temp is not None:
+                        print(f"Weather: {temp:.1f}°C, {humidity}% humidity")
+                else:
+                    print("PM2.5: fetch failed")
 
                 # Check duration
                 if cfg.duration_hours:
