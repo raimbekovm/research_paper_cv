@@ -74,6 +74,7 @@ class Camera:
         quality: Quality metrics for PM2.5 estimation
         recommended: Whether camera is recommended for use
         require_quality_filter: Whether frames need quality filtering
+        night_capable: Whether camera provides useful data at night
         description: Detailed description of camera characteristics
     """
 
@@ -84,6 +85,7 @@ class Camera:
     quality: CameraQualityMetrics
     recommended: bool = False
     require_quality_filter: bool = False
+    night_capable: bool = False
     description: str = ""
 
     @property
@@ -137,6 +139,7 @@ class CameraRegistry:
             ),
             recommended=True,
             require_quality_filter=False,
+            night_capable=True,
             description=(
                 "Ideal panoramic view of entire city. Excellent atmospheric haze "
                 "visibility with 50% sky coverage and 10+ km depth. Sensor distance "
@@ -164,13 +167,14 @@ class CameraRegistry:
             ),
             recommended=True,
             require_quality_filter=False,
+            night_capable=True,
             description=(
                 "Excellent panoramic view of southern residential district. "
                 "Good atmospheric haze visibility with 40% sky and 5+ km depth."
             ),
         ))
 
-        # KT Center - SUPPLEMENTARY camera (rotating)
+        # KT Center - SUPPLEMENTARY camera (rotating, daytime only)
         self._register(Camera(
             id="kt_center",
             name="Kyrgyztelecom Center",
@@ -269,6 +273,10 @@ class CameraRegistry:
         """Get only recommended cameras."""
         return {k: v for k, v in self._cameras.items() if v.recommended}
 
+    def get_night_capable(self) -> Dict[str, Camera]:
+        """Get cameras suitable for night collection."""
+        return {k: v for k, v in self._cameras.items() if v.recommended and v.night_capable}
+
     def get_by_quality(self, min_score: int = 7) -> Dict[str, Camera]:
         """
         Get cameras meeting minimum quality threshold.
@@ -315,6 +323,16 @@ def get_active_cameras() -> Dict[str, Camera]:
         Dictionary mapping camera IDs to Camera instances
     """
     return get_registry().get_recommended()
+
+
+def get_night_cameras() -> Dict[str, Camera]:
+    """
+    Get cameras suitable for night collection.
+
+    Returns:
+        Dictionary of night-capable cameras
+    """
+    return get_registry().get_night_capable()
 
 
 def get_camera(camera_id: str) -> Optional[Camera]:
