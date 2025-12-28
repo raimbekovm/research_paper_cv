@@ -1,350 +1,461 @@
 """
-Автоматический сбор данных со всех камер Бишкека
-Использует многопоточность для одновременного захвата кадров
-ВАЖНО: Собирает только в дневное время (визуальные признаки PM2.5 видны только днём)
+Data collection pipeline for AirVision PM2.5 estimation system.
+
+This module provides automated data collection from multiple webcams
+with support for daylight-only collection, quality filtering, and
+continuous monitoring.
+
+Example:
+    >>> from src.collect_data import DataCollector
+    >>> collector = DataCollector()
+    >>> results = collector.collect_once()
+
+Command-line usage:
+    $ python -m src.collect_data --mode continuous --interval 30
 """
 
-import cv2
-import os
-from datetime import datetime, time as dt_time
+import argparse
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import argparse
-from camera_config import CAMERAS, get_recommended_cameras
-from frame_quality import get_default_filter
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+
+from src.camera_config import Camera, get_active_cameras, get_camera, CAMERAS, get_recommended_cameras
+from src.frame_quality import QualityAssessor, QualityMetrics, QualityThresholds
+from src.utils.logging import get_logger
+from src.utils.io import ensure_dir, save_json
+
+logger = get_logger(__name__)
 
 
-class MultiCameraCapture:
-    """Класс для одновременного захвата кадров с нескольких камер"""
+@dataclass
+class CollectionConfig:
+    """
+    Configuration for data collection.
 
-    def __init__(self, cameras, output_dir="data/images", daylight_start=8, daylight_end=18):
-        """
-        Args:
-            cameras: dict с данными камер из camera_config.py
-            output_dir: Базовая директория для сохранения изображений
-            daylight_start: Начало светового дня (час, 0-23)
-            daylight_end: Конец светового дня (час, 0-23)
-        """
-        self.cameras = cameras
-        self.output_dir = output_dir
-        self.daylight_start = daylight_start
-        self.daylight_end = daylight_end
+    Attributes:
+        output_dir: Base directory for saving images
+        interval_minutes: Time between collections
+        duration_hours: Total duration (None for infinite)
+        daylight_only: Whether to skip nighttime
+        daylight_start: Start hour for daylight (0-23)
+        daylight_end: End hour for daylight (0-23)
+        max_workers: Max threads for parallel capture
+        jpeg_quality: JPEG compression quality (1-100)
+    """
 
-        # Фильтр качества для поворотных камер
-        self.quality_filter = get_default_filter()
+    output_dir: Path = field(default_factory=lambda: Path("data/images"))
+    interval_minutes: int = 30
+    duration_hours: Optional[int] = None
+    daylight_only: bool = True
+    daylight_start: int = 8
+    daylight_end: int = 18
+    max_workers: int = 5
+    jpeg_quality: int = 95
 
-        # Создаём директории для каждой камеры
-        for camera_id in cameras.keys():
-            camera_dir = os.path.join(output_dir, camera_id)
-            os.makedirs(camera_dir, exist_ok=True)
 
-    def is_daylight(self):
-        """
-        Проверяет, является ли текущее время дневным
+@dataclass
+class CaptureResult:
+    """Result of a single camera capture attempt."""
 
-        Returns:
-            bool: True если сейчас день, False если ночь
-        """
+    camera_id: str
+    camera_name: str
+    success: bool
+    timestamp: datetime
+    filepath: Optional[Path] = None
+    resolution: Optional[Tuple[int, int]] = None
+    error: Optional[str] = None
+    filtered: bool = False
+    quality_metrics: Optional[Dict] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for serialization."""
+        return {
+            "camera_id": self.camera_id,
+            "camera_name": self.camera_name,
+            "success": self.success,
+            "timestamp": self.timestamp.isoformat(),
+            "filepath": str(self.filepath) if self.filepath else None,
+            "resolution": self.resolution,
+            "error": self.error,
+            "filtered": self.filtered,
+            "quality_metrics": self.quality_metrics,
+        }
+
+
+class DataCollector:
+    """
+    Multi-camera data collector for atmospheric visibility analysis.
+
+    This class manages automated data collection from multiple webcams,
+    with support for parallel capture, quality filtering, and daylight-only
+    collection modes.
+
+    Args:
+        cameras: Dictionary of cameras to collect from
+        config: Collection configuration
+
+    Example:
+        >>> collector = DataCollector()
+        >>> results = collector.collect_once()
+        >>> print(f"Captured {sum(r.success for r in results)} frames")
+    """
+
+    def __init__(
+        self,
+        cameras: Optional[Dict[str, Camera]] = None,
+        config: Optional[CollectionConfig] = None,
+    ):
+        self.cameras = cameras or get_active_cameras()
+        self.config = config or CollectionConfig()
+        self.quality_assessor = QualityAssessor(QualityThresholds.default())
+
+        # Create output directories
+        for camera_id in self.cameras.keys():
+            ensure_dir(self.config.output_dir / camera_id)
+
+        ensure_dir(self.config.output_dir / "metadata")
+
+        logger.info(f"Initialized DataCollector with {len(self.cameras)} cameras")
+
+    def is_daylight(self) -> bool:
+        """Check if current time is within daylight hours."""
         current_hour = datetime.now().hour
-        return self.daylight_start <= current_hour < self.daylight_end
+        return self.config.daylight_start <= current_hour < self.config.daylight_end
 
-    def capture_single_camera(self, camera_id, camera_info, timestamp):
+    def _capture_single(
+        self,
+        camera_id: str,
+        camera: Camera,
+        timestamp: datetime,
+    ) -> CaptureResult:
         """
-        Захват кадра с одной камеры
+        Capture a single frame from one camera.
+
+        Args:
+            camera_id: Camera identifier
+            camera: Camera configuration
+            timestamp: Capture timestamp
 
         Returns:
-            dict: результат захвата с метаданными
+            CaptureResult with capture status and metadata
         """
+        cap = None
         try:
-            # Открываем видеопоток
-            cap = cv2.VideoCapture(camera_info["url"])
+            # Open video stream
+            cap = cv2.VideoCapture(camera.url)
 
             if not cap.isOpened():
-                return {
-                    "camera_id": camera_id,
-                    "success": False,
-                    "error": "Не удалось открыть поток"
-                }
+                return CaptureResult(
+                    camera_id=camera_id,
+                    camera_name=camera.name,
+                    success=False,
+                    timestamp=timestamp,
+                    error="Failed to open stream",
+                )
 
-            # Читаем кадр
+            # Read frame
             ret, frame = cap.read()
-            cap.release()
 
             if not ret or frame is None:
-                return {
-                    "camera_id": camera_id,
-                    "success": False,
-                    "error": "Не удалось захватить кадр"
-                }
+                return CaptureResult(
+                    camera_id=camera_id,
+                    camera_name=camera.name,
+                    success=False,
+                    timestamp=timestamp,
+                    error="Failed to read frame",
+                )
 
-            # Проверяем качество кадра (для камер с фильтрацией)
+            # Quality check for rotating cameras
             quality_metrics = None
-            if camera_info.get("require_quality_filter", False):
-                is_useful, quality_metrics = self.quality_filter.filter_frame(frame)
-                if not is_useful:
-                    return {
-                        "camera_id": camera_id,
-                        "success": False,
-                        "error": f"Кадр отклонён фильтром: {quality_metrics['reason']}",
-                        "filtered": True,
-                        "quality_metrics": quality_metrics
-                    }
+            if camera.require_quality_filter:
+                metrics = self.quality_assessor.assess(frame)
+                quality_metrics = metrics.to_dict()
 
-            # Формируем путь к файлу
-            timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')
+                if not metrics.is_valid:
+                    return CaptureResult(
+                        camera_id=camera_id,
+                        camera_name=camera.name,
+                        success=False,
+                        timestamp=timestamp,
+                        error=f"Quality filter: {metrics.rejection_reason.value}",
+                        filtered=True,
+                        quality_metrics=quality_metrics,
+                    )
+
+            # Generate filepath
+            timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
             filename = f"{camera_id}_{timestamp_str}.jpg"
-            camera_dir = os.path.join(self.output_dir, camera_id)
-            filepath = os.path.join(camera_dir, filename)
+            filepath = self.config.output_dir / camera_id / filename
 
-            # Сохраняем изображение
-            cv2.imwrite(filepath, frame)
+            # Save frame
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality]
+            cv2.imwrite(str(filepath), frame, encode_params)
 
-            result = {
-                "camera_id": camera_id,
-                "camera_name": camera_info["name"],
-                "success": True,
-                "filepath": filepath,
-                "timestamp": timestamp,
-                "resolution": (frame.shape[1], frame.shape[0]),
-                "coordinates": camera_info["coordinates"],
-                "filtered": False
-            }
-
-            # Добавляем метрики качества если камера использует фильтрацию
-            if quality_metrics:
-                result["quality_metrics"] = quality_metrics
-
-            return result
+            return CaptureResult(
+                camera_id=camera_id,
+                camera_name=camera.name,
+                success=True,
+                timestamp=timestamp,
+                filepath=filepath,
+                resolution=(frame.shape[1], frame.shape[0]),
+                quality_metrics=quality_metrics,
+            )
 
         except Exception as e:
-            return {
-                "camera_id": camera_id,
-                "success": False,
-                "error": str(e)
-            }
+            logger.exception(f"Error capturing {camera_id}")
+            return CaptureResult(
+                camera_id=camera_id,
+                camera_name=camera.name,
+                success=False,
+                timestamp=timestamp,
+                error=str(e),
+            )
 
-    def capture_all_cameras(self, max_workers=5):
+        finally:
+            if cap is not None:
+                cap.release()
+
+    def collect_once(self) -> List[CaptureResult]:
         """
-        Одновременный захват кадров со всех камер
-
-        Args:
-            max_workers: Максимальное количество потоков
+        Collect frames from all cameras once.
 
         Returns:
-            list: список результатов для каждой камеры
+            List of CaptureResult objects
         """
         timestamp = datetime.now()
         results = []
 
-        print(f"🎥 Начинаем захват кадров...")
-        print(f"⏰ Время: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"📹 Количество камер: {len(self.cameras)}")
-        print("-" * 80)
+        logger.info(f"Starting capture from {len(self.cameras)} cameras")
 
-        # Используем ThreadPoolExecutor для параллельного захвата
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Запускаем захват для каждой камеры
-            future_to_camera = {
-                executor.submit(self.capture_single_camera, camera_id, camera_info, timestamp): camera_id
-                for camera_id, camera_info in self.cameras.items()
+        with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+            futures = {
+                executor.submit(self._capture_single, cam_id, cam, timestamp): cam_id
+                for cam_id, cam in self.cameras.items()
             }
 
-            # Собираем результаты по мере готовности
-            for future in as_completed(future_to_camera):
+            for future in as_completed(futures):
                 result = future.result()
                 results.append(result)
 
-                # Выводим результат
-                if result["success"]:
-                    print(f"✅ {result['camera_name']}")
-                    print(f"   Файл: {result['filepath']}")
-                    print(f"   Разрешение: {result['resolution'][0]}x{result['resolution'][1]}")
-                    # Показываем метрики качества если есть
-                    if "quality_metrics" in result:
-                        qm = result["quality_metrics"]
-                        print(f"   Качество: яркость={qm['brightness']:.0f}, контраст={qm['contrast']:.0f}, резкость={qm['sharpness']:.0f}")
+                if result.success:
+                    logger.info(f"Captured {result.camera_id}: {result.resolution}")
+                elif result.filtered:
+                    logger.debug(f"Filtered {result.camera_id}: {result.error}")
                 else:
-                    # Отфильтрованный кадр vs ошибка
-                    if result.get("filtered", False):
-                        print(f"🔍 {result['camera_id']} - кадр отфильтрован")
-                        print(f"   Причина: {result['error'].split(': ')[1]}")
-                    else:
-                        print(f"❌ {result['camera_id']}")
-                        print(f"   Ошибка: {result['error']}")
+                    logger.warning(f"Failed {result.camera_id}: {result.error}")
 
-        print("-" * 80)
-        successful = sum(1 for r in results if r["success"])
-        filtered = sum(1 for r in results if r.get("filtered", False))
-        print(f"📊 Результат: {successful}/{len(results)} камер успешно", end="")
-        if filtered > 0:
-            print(f" (🔍 отфильтровано: {filtered})")
-        else:
-            print()
+        successful = sum(1 for r in results if r.success)
+        filtered = sum(1 for r in results if r.filtered)
+        logger.info(f"Collection complete: {successful}/{len(results)} successful, {filtered} filtered")
 
         return results
 
-    def collect_continuous(self, interval_minutes=60, duration_hours=None, skip_night=True):
+    def _save_metadata(self, results: List[CaptureResult], collection_num: int) -> None:
+        """Save collection metadata to JSON file."""
+        timestamp = datetime.now()
+        metadata = {
+            "collection_number": collection_num,
+            "timestamp": timestamp.isoformat(),
+            "cameras_total": len(results),
+            "cameras_successful": sum(1 for r in results if r.success),
+            "cameras_filtered": sum(1 for r in results if r.filtered),
+            "results": [r.to_dict() for r in results],
+        }
+
+        filename = f"collection_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = self.config.output_dir / "metadata" / filename
+        save_json(metadata, filepath)
+
+    def collect_continuous(self) -> None:
         """
-        Непрерывный сбор данных с заданным интервалом
+        Run continuous data collection.
 
-        Args:
-            interval_minutes: Интервал между сборами в минутах
-            duration_hours: Длительность сбора в часах (None = бесконечно)
-            skip_night: Пропускать ночное время (рекомендуется True)
+        Collects data at regular intervals, optionally skipping nighttime.
+        Runs until duration_hours is reached or interrupted.
         """
-        print("=" * 80)
-        print("🚀 АВТОМАТИЧЕСКИЙ СБОР ДАННЫХ")
-        print("=" * 80)
-        print(f"📹 Камер: {len(self.cameras)}")
-        print(f"⏱️  Интервал: {interval_minutes} минут")
-        if duration_hours:
-            print(f"⏰ Длительность: {duration_hours} часов")
-        else:
-            print(f"⏰ Длительность: бесконечно (Ctrl+C для остановки)")
-        print(f"💾 Директория: {self.output_dir}")
-
-        if skip_night:
-            print(f"☀️  Дневной режим: {self.daylight_start}:00 - {self.daylight_end}:00")
-            print(f"🌙 Ночное время: пропускается (нет визуальных признаков PM2.5)")
-        else:
-            print(f"⚠️  Режим 24/7: сбор днём и ночью")
+        cfg = self.config
 
         print("=" * 80)
-        print()
+        print("AIRVISION DATA COLLECTION")
+        print("=" * 80)
+        print(f"Cameras: {len(self.cameras)}")
+        print(f"Interval: {cfg.interval_minutes} minutes")
+        print(f"Duration: {cfg.duration_hours or 'infinite'} hours")
+        print(f"Output: {cfg.output_dir}")
+
+        if cfg.daylight_only:
+            print(f"Daylight mode: {cfg.daylight_start}:00 - {cfg.daylight_end}:00")
+        else:
+            print("24/7 mode: collecting day and night")
+
+        print("=" * 80)
 
         start_time = time.time()
         collection_count = 0
-        skipped_count = 0
 
         try:
             while True:
-                # Проверяем, светлое ли время суток
-                if skip_night and not self.is_daylight():
-                    current_time = datetime.now()
-
-                    # Вычисляем время до следующего рассвета
-                    next_daylight_hour = self.daylight_start
-                    if current_time.hour >= self.daylight_end:
-                        # Если уже вечер, ждём до утра
-                        hours_until_daylight = (24 - current_time.hour) + next_daylight_hour
-                    else:
-                        # Если раннее утро
-                        hours_until_daylight = next_daylight_hour - current_time.hour
-
-                    print(f"\n🌙 Сейчас {current_time.strftime('%H:%M')} - ночное время")
-                    print(f"💤 Пропускаем сбор (визуальные признаки не видны)")
-                    print(f"⏰ Следующий сбор в ~{next_daylight_hour}:00")
-                    print(f"⏳ Ожидание ~{hours_until_daylight} часов...")
-
-                    skipped_count += 1
-
-                    # Спим до следующего интервала
-                    time.sleep(interval_minutes * 60)
+                # Check daylight
+                if cfg.daylight_only and not self.is_daylight():
+                    current = datetime.now()
+                    logger.info(f"Nighttime ({current.strftime('%H:%M')}), skipping")
+                    print(f"\n[{current.strftime('%H:%M')}] Nighttime - skipping collection")
+                    time.sleep(cfg.interval_minutes * 60)
                     continue
 
                 collection_count += 1
+
                 print(f"\n{'='*80}")
-                print(f"📸 Сбор #{collection_count} (☀️  Дневное время)")
-                print(f"{'='*80}")
+                print(f"Collection #{collection_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print("=" * 80)
 
-                # Захватываем кадры со всех камер
-                results = self.capture_all_cameras()
-
-                # Сохраняем метаданные
+                # Capture from all cameras
+                results = self.collect_once()
                 self._save_metadata(results, collection_count)
 
-                # Проверяем длительность
-                if duration_hours:
-                    elapsed_hours = (time.time() - start_time) / 3600
-                    if elapsed_hours >= duration_hours:
-                        print(f"\n✅ Сбор завершён! Всего сборов: {collection_count}")
-                        if skip_night:
-                            print(f"🌙 Пропущено ночных интервалов: {skipped_count}")
+                # Print summary
+                successful = sum(1 for r in results if r.success)
+                filtered = sum(1 for r in results if r.filtered)
+
+                for r in results:
+                    if r.success:
+                        qm = r.quality_metrics
+                        quality_info = ""
+                        if qm:
+                            quality_info = f" (brightness={qm['brightness']:.0f}, contrast={qm['contrast']:.0f})"
+                        print(f"  [OK] {r.camera_name}: {r.resolution[0]}x{r.resolution[1]}{quality_info}")
+                    elif r.filtered:
+                        print(f"  [FILTERED] {r.camera_name}: {r.error}")
+                    else:
+                        print(f"  [FAIL] {r.camera_name}: {r.error}")
+
+                print(f"\nResult: {successful}/{len(results)} successful", end="")
+                if filtered:
+                    print(f" ({filtered} filtered)")
+                else:
+                    print()
+
+                # Check duration
+                if cfg.duration_hours:
+                    elapsed = (time.time() - start_time) / 3600
+                    if elapsed >= cfg.duration_hours:
+                        print(f"\nCollection complete! Total: {collection_count} collections")
                         break
 
-                # Ждём до следующего сбора
-                next_collection_time = datetime.fromtimestamp(time.time() + interval_minutes * 60)
-                print(f"\n⏳ Следующий сбор через {interval_minutes} минут...")
-                print(f"⏰ Следующий сбор: {next_collection_time.strftime('%H:%M:%S')}")
-                print("=" * 80)
-                time.sleep(interval_minutes * 60)
+                # Wait for next interval
+                next_time = datetime.fromtimestamp(time.time() + cfg.interval_minutes * 60)
+                print(f"\nNext collection at {next_time.strftime('%H:%M:%S')}")
+                time.sleep(cfg.interval_minutes * 60)
 
         except KeyboardInterrupt:
-            print(f"\n\n⚠️  Сбор остановлен пользователем")
-            print(f"📊 Всего сборов: {collection_count}")
-            if skip_night:
-                print(f"🌙 Пропущено ночных интервалов: {skipped_count}")
-
-    def _save_metadata(self, results, collection_count):
-        """Сохранение метаданных сбора"""
-        metadata_dir = os.path.join(self.output_dir, "metadata")
-        os.makedirs(metadata_dir, exist_ok=True)
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        metadata_file = os.path.join(metadata_dir, f"collection_{timestamp}.txt")
-
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            f.write(f"Сбор #{collection_count}\n")
-            f.write(f"Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Камер: {len(results)}\n")
-            f.write(f"Успешно: {sum(1 for r in results if r['success'])}\n")
-            f.write("\nРезультаты:\n")
-            for result in results:
-                f.write(f"\n{result['camera_id']}:\n")
-                if result['success']:
-                    f.write(f"  Файл: {result['filepath']}\n")
-                    f.write(f"  Координаты: {result['coordinates']}\n")
-                else:
-                    f.write(f"  Ошибка: {result['error']}\n")
+            print(f"\n\nCollection stopped by user. Total: {collection_count} collections")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Сбор данных с камер Бишкека')
-    parser.add_argument('--mode', choices=['test', 'continuous'], default='test',
-                        help='Режим работы: test (один снимок) или continuous (непрерывно)')
-    parser.add_argument('--interval', type=int, default=60,
-                        help='Интервал между снимками в минутах (default: 60)')
-    parser.add_argument('--duration', type=int, default=None,
-                        help='Длительность сбора в часах (default: бесконечно)')
-    parser.add_argument('--all-cameras', action='store_true',
-                        help='Использовать ВСЕ камеры (включая нерекомендованные)')
-    parser.add_argument('--output', type=str, default='data/images',
-                        help='Директория для сохранения (default: data/images)')
-    parser.add_argument('--daylight-start', type=int, default=8,
-                        help='Начало светового дня, час (default: 8)')
-    parser.add_argument('--daylight-end', type=int, default=18,
-                        help='Конец светового дня, час (default: 18)')
-    parser.add_argument('--24-7', action='store_true',
-                        help='Собирать данные 24/7 (включая ночь, не рекомендуется)')
+    """Main entry point for command-line usage."""
+    parser = argparse.ArgumentParser(
+        description="AirVision Data Collection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --mode test                    # Single test capture
+  %(prog)s --mode continuous --interval 30 --duration 12
+  %(prog)s --mode continuous --24-7       # Include nighttime
+        """,
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=["test", "continuous"],
+        default="test",
+        help="Collection mode (default: test)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=30,
+        help="Interval between captures in minutes (default: 30)",
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=None,
+        help="Duration in hours (default: infinite)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="data/images",
+        help="Output directory (default: data/images)",
+    )
+    parser.add_argument(
+        "--daylight-start",
+        type=int,
+        default=8,
+        help="Daylight start hour (default: 8)",
+    )
+    parser.add_argument(
+        "--daylight-end",
+        type=int,
+        default=18,
+        help="Daylight end hour (default: 18)",
+    )
+    parser.add_argument(
+        "--24-7",
+        action="store_true",
+        dest="all_day",
+        help="Collect 24/7 including nighttime",
+    )
+    parser.add_argument(
+        "--all-cameras",
+        action="store_true",
+        help="Use all cameras including non-recommended",
+    )
 
     args = parser.parse_args()
 
-    # Выбираем камеры
+    # Select cameras
     if args.all_cameras:
-        cameras = CAMERAS
-        print("⚠️  Используются ВСЕ камеры (включая поворотную)")
+        # Convert dict-based CAMERAS to Camera objects
+        from src.camera_config import get_registry
+        cameras = get_registry().get_all()
+        print("Using ALL cameras")
     else:
-        cameras = get_recommended_cameras()
-        print("✅ Используются только рекомендованные камеры")
+        cameras = get_active_cameras()
+        print("Using recommended cameras only")
 
-    # Создаём объект для сбора
-    collector = MultiCameraCapture(
-        cameras,
-        output_dir=args.output,
+    # Create config
+    config = CollectionConfig(
+        output_dir=Path(args.output),
+        interval_minutes=args.interval,
+        duration_hours=args.duration,
+        daylight_only=not args.all_day,
         daylight_start=args.daylight_start,
-        daylight_end=args.daylight_end
+        daylight_end=args.daylight_end,
     )
 
-    if args.mode == 'test':
-        print("\n🧪 РЕЖИМ ТЕСТИРОВАНИЯ\n")
-        collector.capture_all_cameras()
+    # Create collector
+    collector = DataCollector(cameras=cameras, config=config)
+
+    if args.mode == "test":
+        print("\nTEST MODE - Single capture\n")
+        results = collector.collect_once()
+
+        print("\nResults:")
+        for r in results:
+            status = "OK" if r.success else ("FILTERED" if r.filtered else "FAIL")
+            print(f"  [{status}] {r.camera_name}")
+            if r.filepath:
+                print(f"         File: {r.filepath}")
     else:
-        skip_night = not args.__dict__.get('24_7', False)
-        collector.collect_continuous(
-            interval_minutes=args.interval,
-            duration_hours=args.duration,
-            skip_night=skip_night
-        )
+        collector.collect_continuous()
 
 
 if __name__ == "__main__":
