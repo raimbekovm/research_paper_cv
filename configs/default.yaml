@@ -1,0 +1,85 @@
+# AirVision Default Configuration
+# ================================
+# Image-Based PM2.5 Estimation System
+
+project:
+  name: "AirVision"
+  version: "0.1.0"
+  description: "Image-Based PM2.5 Estimation Using Urban Webcams"
+
+# Data Collection Settings
+collection:
+  interval_minutes: 30
+  duration_hours: 12
+  daylight_only: true
+  daylight_start_hour: 8
+  daylight_end_hour: 18
+  output_dir: "data/images"
+
+# Camera Settings
+cameras:
+  default_timeout: 10
+  max_retries: 3
+  retry_delay: 2
+  image_format: "jpg"
+  image_quality: 95
+
+# Frame Quality Filtering
+quality:
+  min_brightness: 30
+  max_brightness: 250
+  min_contrast: 20
+  min_sharpness: 100
+  min_sky_percentage: 30
+
+# PM2.5 Data Sources
+pm25:
+  primary_source: "openaq"
+  backup_source: "iqair"
+  fetch_interval_minutes: 60
+  cache_dir: "data/pm25"
+
+# Weather Data
+weather:
+  source: "openmeteo"
+  parameters:
+    - temperature
+    - humidity
+    - pressure
+    - wind_speed
+    - visibility
+  cache_dir: "data/weather"
+
+# Model Configuration
+model:
+  architecture: "resnet50"
+  pretrained: true
+  input_size: [224, 224]
+  num_classes: 1  # Regression task
+
+  training:
+    batch_size: 32
+    learning_rate: 0.001
+    epochs: 100
+    optimizer: "adam"
+    scheduler: "cosine"
+    early_stopping_patience: 10
+
+  augmentation:
+    horizontal_flip: true
+    random_crop: true
+    color_jitter: true
+    normalize: true
+
+# Experiment Tracking
+experiment:
+  output_dir: "outputs"
+  save_checkpoints: true
+  checkpoint_interval: 10
+  log_metrics: true
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  file: "logs/airvision.log"
