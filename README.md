@@ -1,296 +1,286 @@
-# Image-Based PM2.5 Estimation for Bishkek Using Urban Webcams
+<h1 align="center">
+  <br>
+  AirVision
+  <br>
+</h1>
 
-Research project for estimating air pollution (PM2.5) levels in Bishkek, Kyrgyzstan using computer vision and multimodal machine learning.
+<h4 align="center">Image-Based PM2.5 Estimation Using Urban Webcams</h4>
 
-**Target:** Scopus Q4 publication in Environmental Monitoring / Computer Vision / Machine Learning
+<p align="center">
+  <a href="https://github.com/raimbekovm/airvision/actions/workflows/ci.yml">
+    <img src="https://github.com/raimbekovm/airvision/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://www.python.org/downloads/">
+    <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="Python 3.8+">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
+  </a>
+  <a href="https://github.com/psf/black">
+    <img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black">
+  </a>
+</p>
+
+<p align="center">
+  <a href="#key-features">Key Features</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#methodology">Methodology</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
 ---
 
 ## Overview
 
-This project develops a low-cost air quality monitoring system using publicly available urban webcams. By analyzing atmospheric visibility (haze, contrast, depth perception) combined with meteorological data, we estimate PM2.5 concentration levels without expensive sensor networks.
+**AirVision** is a research project for estimating air pollution (PM2.5) levels in Bishkek, Kyrgyzstan using computer vision and multimodal machine learning. We develop a low-cost air quality monitoring system using publicly available urban webcams.
+
+**Target:** Scopus Q4 publication in Environmental Monitoring / Computer Vision / Machine Learning
 
 ### Key Innovation
 
 Unlike traditional approaches requiring proximity between camera and sensor, we leverage the physical principle that **atmospheric visibility integrates PM2.5 along the entire line of sight (5-10 km)**. During winter thermal inversion in Bishkek, PM2.5 is spatially homogeneous at city scale, enabling panoramic cameras to effectively measure city-average pollution regardless of sensor distance.
 
-### Scientific Contribution
+---
 
-- Low-cost PM2.5 monitoring for resource-constrained cities
-- Multimodal deep learning (visual + meteorological features)
-- Physical understanding of visibility-PM2.5 relationship
-- First application for Central Asian urban environment
-- Comparative analysis: baseline vs image-only vs multimodal models
+## Key Features
+
+- **Low-cost monitoring** — Uses existing public webcam infrastructure
+- **Multimodal ML** — Combines visual features with meteorological data
+- **Physics-based approach** — Grounded in atmospheric visibility theory
+- **Automated collection** — Continuous data pipeline with quality filtering
+- **Extensible** — Easy to add new cameras and data sources
 
 ---
 
-## Installation
-
-### Prerequisites
-
-- Python 3.8+
-- pip package manager
-- Git
-
-### Setup
+## Quick Start
 
 ```bash
-# Clone repository
-git clone https://github.com/raimbekovm/research_paper_cv.git
-cd research_paper_cv
+# Clone and setup
+git clone https://github.com/raimbekovm/airvision.git
+cd airvision
 
 # Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
-```
+make install-dev
 
-### API Keys Setup
-
-Get free API keys for PM2.5 data:
-
-1. **OpenWeatherMap** (recommended, 1000 calls/day)
-   - Register: https://openweathermap.org/api
-   - Get API key from dashboard
-
-2. **IQAir** (backup, 1000 calls/month)
-   - Register: https://www.iqair.com/air-pollution-data-api
-   - Choose Community Edition (free)
-
-3. Create `.env` file:
-```bash
+# Configure API keys
 cp .env.example .env
-nano .env  # Add your API keys
+# Edit .env with your API keys (see docs/API_KEYS_GUIDE.md)
+
+# Test single capture
+python src/capture_frame.py
+
+# Start data collection
+make collect
 ```
 
-See detailed instructions: `docs/API_KEYS_GUIDE.md`
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         AirVision Pipeline                          │
+└─────────────────────────────────────────────────────────────────────┘
+                                   │
+          ┌────────────────────────┼────────────────────────┐
+          ▼                        ▼                        ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│   Data Sources   │    │   Data Sources   │    │   Data Sources   │
+│    (Webcams)     │    │    (PM2.5 API)   │    │   (Weather API)  │
+│                  │    │                  │    │                  │
+│ • bishkek_pano   │    │ • IQAir          │    │ • OpenWeatherMap │
+│ • sovmin         │    │ • OpenAQ         │    │ • Open-Meteo     │
+│ • kt_center      │    │                  │    │                  │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Data Collection Layer                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
+│  │   Frame     │  │   Quality   │  │    PM2.5    │  │   Weather   │ │
+│  │  Capture    │  │  Filtering  │  │   Fetcher   │  │   Fetcher   │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Dataset (Synchronized)                       │
+│                                                                      │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐         │
+│   │  Image  │ +  │  PM2.5  │ +  │ Weather │ +  │Metadata │         │
+│   │ (1080p) │    │ (µg/m³) │    │  (T,H,W)│    │  (time) │         │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘         │
+└─────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Model Training                             │
+│                                                                      │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐           │
+│  │   Baseline    │  │  Image-Only   │  │  Multimodal   │           │
+│  │  (Weather →   │  │  (CNN →       │  │  (CNN+MLP →   │           │
+│  │    PM2.5)     │  │    PM2.5)     │  │    PM2.5)     │           │
+│  └───────────────┘  └───────────────┘  └───────────────┘           │
+└─────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+                        ┌──────────────────┐
+                        │   PM2.5 Estimate │
+                        │   + Uncertainty  │
+                        └──────────────────┘
+```
 
 ---
 
 ## Project Structure
 
 ```
-research_paper_cv/
+airvision/
 ├── src/                          # Source code
-│   ├── camera_config.py          # Camera configurations (3 recommended)
-│   ├── capture_frame.py          # Single camera frame capture
-│   ├── collect_data.py           # Multi-camera data collection
-│   ├── fetch_pm25_data.py        # PM2.5 and weather data (IQAir, OpenWeatherMap)
-│   ├── frame_quality.py          # Quality filtering for rotating camera
-│   ├── find_sensors.py           # PM2.5 sensor locations and distances
-│   ├── check_feasibility.py      # Project feasibility analysis
-│   └── baseline_model.py         # Baseline ML model (weather → PM2.5)
+│   ├── __init__.py               # Package initialization
+│   ├── config.py                 # Configuration management
+│   ├── camera_config.py          # Camera configurations
+│   ├── capture_frame.py          # Frame capture
+│   ├── collect_data.py           # Data collection pipeline
+│   ├── frame_quality.py          # Quality assessment
+│   ├── fetch_pm25_data.py        # PM2.5 data fetching
+│   ├── baseline_model.py         # ML baseline models
+│   └── utils/                    # Utility functions
+│       ├── logging.py
+│       └── io.py
+├── configs/                      # Configuration files
+│   └── default.yaml
 ├── data/                         # Data directory (gitignored)
-│   ├── images/                   # Captured frames (organized by camera)
-│   ├── pm25/                     # PM2.5 measurements (JSON)
+│   ├── images/                   # Captured frames
+│   ├── pm25/                     # PM2.5 measurements
 │   ├── weather/                  # Weather data
-│   ├── metadata/                 # Collection metadata
-│   └── sensor_locations.json     # PM2.5 sensor coordinates and analysis
+│   └── metadata/                 # Collection metadata
+├── tests/                        # Test suite
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_frame_quality.py
+│   └── test_utils.py
 ├── docs/                         # Documentation
-│   ├── camera_locations.txt      # Camera coordinates and specifications
-│   ├── camera_specifications.md  # Detailed camera characteristics
-│   ├── API_KEYS_GUIDE.md         # Step-by-step API setup guide
-│   ├── PHYSICS_VISIBILITY_PM25.md # Physical basis of visibility-PM2.5 relation
-│   └── CRITICAL_FINDINGS_2025-12-27_CORRECTED.md # Camera selection analysis
-├── .env.example                  # API keys template
-├── requirements.txt              # Python dependencies
-├── PROJECT_INFO.md               # Internal project documentation (not in git)
-└── README.md                     # This file
+├── .github/workflows/            # CI/CD
+├── Makefile                      # Common commands
+├── pyproject.toml                # Project configuration
+├── requirements.txt              # Dependencies
+└── README.md
 ```
 
 ---
 
 ## Webcam Cameras
 
-We use **3 recommended webcams** selected by visual quality criteria rather than sensor proximity.
+We use **3 webcams** selected by visual quality criteria:
 
-### Selection Criteria
-
-1. **Panoramic field of view** - captures city-scale atmospheric haze
-2. **Depth of field** - distant objects visible at 5-10 km
-3. **Sky visibility** - >30% of frame for atmospheric transparency assessment
-4. **Minimal foreground obstruction**
-
-### Recommended Cameras
-
-| Camera | Visual Quality | Depth | Sky | Sensor Distance | Status |
-|--------|---------------|-------|-----|-----------------|--------|
-| **bishkek_panorama** | 10/10 | 10+ km | 50% | 7.24 km | Primary |
-| **sovmin** | 9/10 | 5+ km | 40% | 5.07 km | Secondary |
-| **kt_center** | 7/10 | varies | 30% | 0.01 km | Supplementary |
-
-**Primary Camera** - Bishkek Panorama
-- Coordinates: 42.799197°N, 74.645485°E
-- Resolution: 1920×1080
-- Viewing direction: ~330° NW
-- Ideal panoramic view of entire city with excellent atmospheric haze visibility
-
-**Secondary Camera** - Sovmin
-- Coordinates: 42.804394°N, 74.587977°E
-- Resolution: 1920×1080
-- Viewing direction: ~45° NE
-- Panoramic view of southern residential district
-
-**Supplementary Camera** - KT Center (rotating)
-- Coordinates: 42.874689°N, 74.612241°E
-- Resolution: 1920×1080
-- Auto quality filtering (~75% frames accepted)
-- Closest to PM2.5 sensor (10 meters)
+| Camera | Quality | Depth | Sky Coverage | Status |
+|--------|---------|-------|--------------|--------|
+| **bishkek_panorama** | 10/10 | 10+ km | 50% | Primary |
+| **sovmin** | 9/10 | 5+ km | 40% | Secondary |
+| **kt_center** | 7/10 | varies | 30% | Supplementary |
 
 **Source:** [Kyrgyztelekom Live Streams](https://online.kt.kg)
-
-**Rationale:** See `docs/PHYSICS_VISIBILITY_PM25.md` for detailed physical justification of camera selection approach.
 
 ---
 
 ## Usage
 
-### 1. Test Data Collection
-
-Test PM2.5 data fetch (requires API keys in `.env`):
+### Data Collection
 
 ```bash
-python src/fetch_pm25_data.py
+# Start daylight collection (8:00-18:00)
+make collect
+
+# Start 24/7 collection
+make collect-24h
+
+# Background collection with logging
+make collect-background
+
+# Check collection status
+make status
+
+# Stop collection
+make stop
 ```
 
-Expected output:
-```
-PM2.5: 39.9 µg/m³ (AQI: 112)
-Temperature: 1°C
-Humidity: 79%
-```
-
-### 2. Test Camera Capture
-
-Capture single frame from all recommended cameras:
+### Development
 
 ```bash
-python src/collect_data.py --cameras bishkek_panorama sovmin kt_center --duration 0.1
+# Run tests
+make test
+
+# Run tests with coverage
+make coverage
+
+# Format code
+make format
+
+# Lint code
+make lint
 ```
-
-### 3. Start Continuous Collection
-
-Collect data every hour during daylight (8:00-18:00):
-
-```bash
-python src/collect_data.py \
-    --cameras bishkek_panorama sovmin kt_center \
-    --daylight-start 8 \
-    --daylight-end 18 \
-    --interval 60 \
-    --duration 4320  # 180 days (~6 months)
-```
-
-**Important:**
-- Collection runs only during daylight (visual haze features invisible at night)
-- Target: 1500 frames/camera over 5 months = 4500 total frames
-- Include winter season (high PM2.5, thermal inversion critical for model)
-
-### 4. Check Project Feasibility
-
-```bash
-python src/check_feasibility.py
-```
-
-Analyzes:
-- Camera-sensor distances and spatial correlation
-- Required dataset size estimates
-- ML infrastructure readiness
-
-### 5. Find PM2.5 Sensors
-
-```bash
-python src/find_sensors.py
-```
-
-Locates PM2.5 sensors in Bishkek and calculates distances to cameras.
-
----
-
-## Data Collection Strategy
-
-### Timeline
-
-- **Phase 1 (5 months):** Continuous data collection (target: 4500 images + synchronized PM2.5)
-- **Phase 2 (1 month):** Dataset preparation, filtering, train/val/test split
-- **Phase 3 (1-2 months):** Model training (baseline, image-only, multimodal)
-- **Phase 4 (2 months):** Analysis, ablation studies, paper writing
-
-### Dataset Targets
-
-| Tier | Frames/Camera | Total Frames | Collection Time | Viability |
-|------|---------------|--------------|-----------------|-----------|
-| Minimum | 500 | 1500 | 50 days | Marginal |
-| **Recommended** | **1500** | **4500** | **150 days (5 months)** | **Good** |
-| Ideal | 3000 | 9000 | 300 days (10 months) | Excellent |
-
-**Critical:** Must include winter season (December-February) for high PM2.5 episodes and thermal inversion conditions.
-
-### Data Synchronization
-
-- Images: captured hourly during daylight
-- PM2.5: synchronized within ±10 minutes of image timestamp
-- Weather: temperature, humidity, wind speed, pressure, visibility
-- Metadata: camera ID, coordinates, viewing direction, timestamp
 
 ---
 
 ## Methodology
 
-### Model Architecture
+### Model Comparison
 
-1. **Baseline Model:** Weather features only → PM2.5
-   - Features: temperature, humidity, wind speed, hour, day of year, is_winter
-   - Model: Ridge regression / Random Forest
-   - Purpose: Establish lower bound performance
-
-2. **Image-Only Model:** CNN → PM2.5
-   - Architecture: ResNet-18 or EfficientNet-B0 (ImageNet pretrained)
-   - Transfer learning (freeze early layers)
-   - Purpose: Evaluate visual features alone
-
-3. **Multimodal Model:** CNN + Weather → PM2.5
-   - Visual features from pretrained CNN
-   - Weather features from MLP
-   - Late fusion: concatenate → regression head
-   - Purpose: Best performance combining both modalities
+| Model | Input | Architecture | Purpose |
+|-------|-------|--------------|---------|
+| **Baseline** | Weather only | Ridge/RF | Lower bound |
+| **Image-Only** | Webcam frames | ResNet-50 | Visual features |
+| **Multimodal** | Image + Weather | CNN + MLP | Best performance |
 
 ### Evaluation Metrics
 
-- **MAE** (Mean Absolute Error) - primary metric
-- **RMSE** (Root Mean Squared Error)
-- **R²** (coefficient of determination)
+- **MAE** — Mean Absolute Error (primary)
+- **RMSE** — Root Mean Squared Error
+- **R²** — Coefficient of determination
 
-### Experiments
+### Physical Basis
 
-- Baseline vs Image-only vs Multimodal comparison
-- Ablation study: which features contribute most?
-- Seasonal analysis: winter (high PM2.5) vs summer (low PM2.5)
-- Cross-camera validation: generalization across camera viewpoints
-- Interpretability: Grad-CAM visualization of visual features
+Atmospheric visibility follows the Beer-Lambert law:
+
+```
+I(d) = I₀ · exp(-β·d)
+```
+
+Where extinction coefficient β ∝ PM2.5 concentration. The camera measures **integrated scattering** along the entire line of sight (5-10 km), enabling city-scale pollution estimation.
 
 ---
 
-## Physical Basis
+## Configuration
 
-### Why Distance to Sensor Doesn't Matter for Panoramic Cameras
+Configuration is managed via YAML files in `configs/`:
 
-Traditional assumption: camera and PM2.5 sensor must be co-located (< 100m).
+```yaml
+# configs/default.yaml
+collection:
+  interval_minutes: 30
+  duration_hours: 12
+  daylight_only: true
 
-**Our approach:** Visual quality > sensor proximity
+model:
+  architecture: "resnet50"
+  pretrained: true
+  training:
+    batch_size: 32
+    learning_rate: 0.001
+```
 
-**Physical justification:**
-1. Atmospheric visibility follows Beer-Lambert law: I(d) = I₀ · exp(-β·d)
-2. Extinction coefficient β ∝ PM2.5 concentration
-3. Camera measures **integrated scattering** along entire line of sight (5-10 km)
-4. Winter thermal inversion in Bishkek creates **city-scale PM2.5 homogeneity** (correlation r > 0.8 at < 10 km)
-5. Sensor at any city location represents city-average PM2.5
-
-**Therefore:** Panoramic camera 7 km from sensor can correlate better than narrow-view camera 70 m from sensor, if visual quality superior.
-
-See detailed analysis: `docs/PHYSICS_VISIBILITY_PM25.md`
+Override settings via environment variables:
+```bash
+export AIRVISION_INTERVAL=15
+export AIRVISION_LOG_LEVEL=DEBUG
+```
 
 ---
 
@@ -298,122 +288,85 @@ See detailed analysis: `docs/PHYSICS_VISIBILITY_PM25.md`
 
 ### Completed ✓
 
-- [x] Camera configuration and testing (5 cameras identified, 3 recommended)
-- [x] Visual quality analysis and camera selection criteria
-- [x] Automated frame capture system with daylight filtering
-- [x] Frame quality filtering for rotating camera (~75% acceptance rate)
-- [x] PM2.5 sensor location discovery (4 sensors in Bishkek)
-- [x] Camera-sensor distance analysis and feasibility check
-- [x] PM2.5 data collection implementation (IQAir, OpenWeatherMap APIs)
-- [x] API keys obtained and configured
-- [x] Physical justification documented (visibility-PM2.5 relationship)
-- [x] Baseline model skeleton
-- [x] Project feasibility confirmed (3 cameras, 4500 frames target)
+- [x] Camera configuration (3 cameras)
+- [x] Automated frame capture with quality filtering
+- [x] PM2.5 data collection (IQAir, OpenWeatherMap APIs)
+- [x] Physical justification documented
+- [x] Project structure and CI/CD setup
 
 ### In Progress ⏳
 
-- [ ] OpenWeatherMap API key activation (2-3 hours wait)
-- [ ] Full system integration test
+- [ ] Continuous data collection (winter 2025-2026)
 
 ### Pending ⏹
 
-- [ ] Continuous data collection (5 months, including winter 2025-2026)
-- [ ] Dataset preparation and preprocessing
 - [ ] Model training (baseline, image-only, multimodal)
-- [ ] Ablation studies and interpretability analysis
+- [ ] Ablation studies and interpretability
 - [ ] Paper writing for Scopus Q4 submission
 
 ---
 
 ## API Rate Limits
 
-| API | Free Tier Limit | Our Usage | Status |
-|-----|-----------------|-----------|--------|
-| **OpenWeatherMap** | 1000 calls/day | ~30 calls/day (3 cameras × 10 hours) | ✓ Sufficient |
-| **IQAir** | 1000 calls/month | ~900 calls/month (3 cameras × 10 hrs × 30 days) | ⚠ Tight but OK |
-| OpenAQ | Deprecated (410) | Not used | - |
-
-**Strategy:** Use OpenWeatherMap as primary (better limits), IQAir as backup.
-
----
-
-## Limitations and Considerations
-
-### Spatial Assumptions
-
-- Approach assumes city-scale PM2.5 homogeneity during winter thermal inversion
-- Valid for winter high-pollution episodes (model's primary use case)
-- May not hold during summer (strong vertical mixing) or localized sources (traffic, industrial)
-- Seasonal performance variation expected
-
-### Data Quality
-
-- Visual haze affected by both PM2.5 and meteorological humidity
-- Baseline weather-only model helps isolate PM2.5 contribution
-- Nighttime images excluded (no visual features)
-- Rotating camera requires quality filtering
-
-### Dataset Size
-
-- 4500 frames modest for deep learning
-- Mitigated by transfer learning (ImageNet pretrained models)
-- Sufficient for Scopus Q4 publication with proper methodology
-
----
-
-## Future Work
-
-- Validate spatial correlation assumption using multiple PM2.5 sensors
-- Quantify seasonal dependence of visibility-PM2.5 relationship
-- Real-time PM2.5 estimation dashboard
-- Expansion to other Central Asian cities
-- Mobile application for public access
-- Long-term monitoring system
+| API | Free Tier | Our Usage | Status |
+|-----|-----------|-----------|--------|
+| **OpenWeatherMap** | 1000/day | ~30/day | ✓ OK |
+| **IQAir** | 1000/month | ~900/month | ⚠ Tight |
 
 ---
 
 ## Contributing
 
-This is an academic research project. Contributions, suggestions, and feedback welcome via issues or pull requests.
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
----
+```bash
+# Setup development environment
+make install-dev
 
-## License
-
-MIT License (tentative - to be finalized)
+# Run pre-commit hooks
+pre-commit run --all-files
+```
 
 ---
 
 ## Citation
 
 ```bibtex
-@article{raimbekov2026pm25bishkek,
-  title={Image-Based PM2.5 Estimation for Bishkek Using Urban Webcams and Multimodal Deep Learning},
-  author={Raimbekov, M.},
-  journal={TBD - Scopus Q4 Environmental/CV journal},
+@article{raimbekov2026airvision,
+  title={Image-Based PM2.5 Estimation for Bishkek Using Urban Webcams
+         and Multimodal Deep Learning},
+  author={Raimbekov, Murat},
+  journal={TBD - Scopus Q4},
   year={2026}
 }
 ```
 
 ---
 
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
 ## Contact
 
-**Author:** Murat Raimbekov
-**Email:** raimbekov_m@auca.kg
-**Institution:** American University of Central Asia
-**GitHub:** https://github.com/raimbekovm/research_paper_cv
+**Murat Raimbekov**
+
+- Email: raimbekov_m@auca.kg
+- GitHub: [@raimbekovm](https://github.com/raimbekovm)
+- Institution: American University of Central Asia
 
 ---
 
 ## Acknowledgments
 
-- **Kyrgyztelekom** for public webcam infrastructure
-- **OpenAQ, IQAir, OpenWeatherMap** for open air quality data APIs
-- **AUCA** for research support
-- Community contributors and reviewers
+- **Kyrgyztelekom** — Public webcam infrastructure
+- **IQAir, OpenWeatherMap** — Air quality and weather APIs
+- **AUCA** — Research support
 
 ---
 
-**Last Updated:** December 27, 2025
-**Project Status:** Data collection preparation complete, ready to start 5-month collection phase
+<p align="center">
+  <i>Last updated: December 28, 2025</i>
+</p>
