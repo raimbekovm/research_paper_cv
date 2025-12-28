@@ -1,148 +1,341 @@
 """
-Скрипт для извлечения кадров из HLS-потоков камер Бишкека
-Использует OpenCV для захвата кадров из .m3u8 потоков
+Frame capture module for AirVision PM2.5 estimation system.
+
+This module provides functionality for capturing frames from HLS video streams
+of urban webcams used for atmospheric visibility analysis.
+
+Example:
+    >>> from src.capture_frame import FrameCapture, capture_single_frame
+    >>> frame, metadata = capture_single_frame("bishkek_panorama")
+    >>> print(f"Captured frame: {frame.shape}")
 """
 
-import cv2
 import os
+from dataclasses import dataclass
 from datetime import datetime
-import time
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
+
+import cv2
+import numpy as np
+
+from src.camera_config import Camera, get_active_cameras, get_camera
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
-class CameraFrameCapture:
-    """Класс для захвата кадров с онлайн-камер"""
+class CaptureError(Exception):
+    """Exception raised when frame capture fails."""
 
-    def __init__(self, stream_url, camera_name, output_dir="data/images"):
+    pass
+
+
+class StreamConnectionError(CaptureError):
+    """Exception raised when unable to connect to video stream."""
+
+    pass
+
+
+class FrameReadError(CaptureError):
+    """Exception raised when unable to read frame from stream."""
+
+    pass
+
+
+@dataclass
+class FrameMetadata:
+    """
+    Metadata for a captured frame.
+
+    Attributes:
+        camera_id: Camera identifier
+        timestamp: Capture timestamp
+        filepath: Path to saved frame (if saved)
+        width: Frame width in pixels
+        height: Frame height in pixels
+        file_size_bytes: Size of saved file (if saved)
+    """
+
+    camera_id: str
+    timestamp: datetime
+    filepath: Optional[Path] = None
+    width: int = 0
+    height: int = 0
+    file_size_bytes: int = 0
+
+    @property
+    def resolution(self) -> str:
+        """Return resolution as string (e.g., '1920x1080')."""
+        return f"{self.width}x{self.height}"
+
+
+class FrameCapture:
+    """
+    Frame capture handler for webcam streams.
+
+    This class manages the capture of individual frames from HLS video streams,
+    with support for automatic retries and proper resource cleanup.
+
+    Args:
+        camera: Camera configuration object
+        output_dir: Directory for saving captured frames
+        timeout: Connection timeout in seconds
+        max_retries: Maximum number of retry attempts
+
+    Example:
+        >>> from src.camera_config import get_camera
+        >>> camera = get_camera("bishkek_panorama")
+        >>> capture = FrameCapture(camera)
+        >>> frame, metadata = capture.capture()
+    """
+
+    def __init__(
+        self,
+        camera: Camera,
+        output_dir: Union[str, Path] = "data/images",
+        timeout: int = 10,
+        max_retries: int = 3,
+    ):
+        self.camera = camera
+        self.output_dir = Path(output_dir) / camera.id
+        self.timeout = timeout
+        self.max_retries = max_retries
+
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.debug(f"Initialized FrameCapture for {camera.id}")
+
+    def _create_capture(self) -> cv2.VideoCapture:
         """
-        Args:
-            stream_url: URL HLS-потока (.m3u8)
-            camera_name: Название камеры для именования файлов
-            output_dir: Директория для сохранения изображений
-        """
-        self.stream_url = stream_url
-        self.camera_name = camera_name
-        self.output_dir = output_dir
-
-        # Создаём директорию если её нет
-        os.makedirs(output_dir, exist_ok=True)
-
-    def capture_frame(self, save=True):
-        """
-        Захватывает один кадр из видеопотока
+        Create and configure OpenCV video capture.
 
         Returns:
-            tuple: (success, frame, timestamp, filename)
+            Configured VideoCapture object
+
+        Raises:
+            StreamConnectionError: If unable to open stream
         """
-        try:
-            # Открываем видеопоток
-            cap = cv2.VideoCapture(self.stream_url)
+        cap = cv2.VideoCapture(self.camera.url)
 
-            if not cap.isOpened():
-                print(f"❌ Не удалось открыть поток: {self.stream_url}")
-                return False, None, None, None
+        # Set capture properties
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-            # Читаем кадр
-            ret, frame = cap.read()
-            cap.release()
+        if not cap.isOpened():
+            raise StreamConnectionError(
+                f"Failed to open stream: {self.camera.url}"
+            )
 
-            if not ret or frame is None:
-                print(f"❌ Не удалось захватить кадр")
-                return False, None, None, None
+        return cap
 
-            # Генерируем timestamp и имя файла
-            timestamp = datetime.now()
-            filename = f"{self.camera_name}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
-            filepath = os.path.join(self.output_dir, filename)
+    def _generate_filename(self, timestamp: datetime) -> Path:
+        """Generate filename for captured frame."""
+        filename = f"{self.camera.id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
+        return self.output_dir / filename
 
-            if save:
-                # Сохраняем изображение
-                cv2.imwrite(filepath, frame)
-                print(f"✅ Кадр сохранён: {filepath}")
-                print(f"   Размер: {frame.shape[1]}x{frame.shape[0]}")
-                print(f"   Время: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-
-            return True, frame, timestamp, filepath
-
-        except Exception as e:
-            print(f"❌ Ошибка при захвате кадра: {e}")
-            return False, None, None, None
-
-    def capture_continuous(self, interval_minutes=60, duration_hours=None):
+    def capture(
+        self,
+        save: bool = True,
+        quality: int = 95,
+    ) -> Tuple[np.ndarray, FrameMetadata]:
         """
-        Непрерывный захват кадров с заданным интервалом
+        Capture a single frame from the video stream.
 
         Args:
-            interval_minutes: Интервал между кадрами в минутах
-            duration_hours: Длительность сбора в часах (None = бесконечно)
+            save: Whether to save the frame to disk
+            quality: JPEG quality for saved frames (1-100)
+
+        Returns:
+            Tuple of (frame as numpy array, frame metadata)
+
+        Raises:
+            CaptureError: If capture fails after all retries
         """
-        print(f"🎥 Начинаем захват кадров с камеры: {self.camera_name}")
-        print(f"📍 Интервал: {interval_minutes} минут")
-        if duration_hours:
-            print(f"⏱️  Длительность: {duration_hours} часов")
-        print(f"💾 Сохранение в: {self.output_dir}")
-        print("-" * 60)
+        last_error: Optional[Exception] = None
 
-        start_time = time.time()
-        frame_count = 0
+        for attempt in range(self.max_retries):
+            try:
+                return self._capture_attempt(save=save, quality=quality)
 
-        while True:
-            # Захватываем кадр
-            success, _, timestamp, filepath = self.capture_frame()
+            except CaptureError as e:
+                last_error = e
+                logger.warning(
+                    f"Capture attempt {attempt + 1}/{self.max_retries} failed: {e}"
+                )
 
-            if success:
-                frame_count += 1
-                print(f"📊 Всего кадров: {frame_count}")
+                if attempt < self.max_retries - 1:
+                    import time
+                    time.sleep(1)  # Brief delay before retry
 
-            # Проверяем длительность
-            if duration_hours:
-                elapsed_hours = (time.time() - start_time) / 3600
-                if elapsed_hours >= duration_hours:
-                    print(f"\n✅ Завершено! Собрано {frame_count} кадров за {duration_hours} часов")
-                    break
+        raise CaptureError(
+            f"Failed to capture frame after {self.max_retries} attempts"
+        ) from last_error
 
-            # Ждём до следующего захвата
-            print(f"⏳ Следующий кадр через {interval_minutes} минут...")
-            print("-" * 60)
-            time.sleep(interval_minutes * 60)
+    def _capture_attempt(
+        self,
+        save: bool,
+        quality: int,
+    ) -> Tuple[np.ndarray, FrameMetadata]:
+        """Single capture attempt."""
+        cap = None
+        try:
+            cap = self._create_capture()
+
+            # Read frame
+            ret, frame = cap.read()
+
+            if not ret or frame is None:
+                raise FrameReadError("Failed to read frame from stream")
+
+            timestamp = datetime.now()
+
+            # Create metadata
+            metadata = FrameMetadata(
+                camera_id=self.camera.id,
+                timestamp=timestamp,
+                width=frame.shape[1],
+                height=frame.shape[0],
+            )
+
+            # Save if requested
+            if save:
+                filepath = self._generate_filename(timestamp)
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                success = cv2.imwrite(str(filepath), frame, encode_params)
+
+                if not success:
+                    raise CaptureError(f"Failed to save frame to {filepath}")
+
+                metadata.filepath = filepath
+                metadata.file_size_bytes = filepath.stat().st_size
+
+                logger.info(
+                    f"Captured {self.camera.id}: {metadata.resolution}, "
+                    f"{metadata.file_size_bytes / 1024:.1f}KB"
+                )
+
+            return frame, metadata
+
+        finally:
+            if cap is not None:
+                cap.release()
+
+    def capture_to_memory(self) -> Tuple[np.ndarray, FrameMetadata]:
+        """
+        Capture frame without saving to disk.
+
+        Returns:
+            Tuple of (frame array, metadata)
+        """
+        return self.capture(save=False)
 
 
-def test_camera(stream_url, camera_name):
-    """Тестирование захвата одного кадра"""
-    print(f"🧪 Тестирование камеры: {camera_name}")
-    print(f"🔗 URL: {stream_url}")
-    print("-" * 60)
+def capture_single_frame(
+    camera_id: str,
+    output_dir: Union[str, Path] = "data/images",
+    save: bool = True,
+) -> Tuple[Optional[np.ndarray], Optional[FrameMetadata]]:
+    """
+    Capture a single frame from specified camera.
 
-    capture = CameraFrameCapture(stream_url, camera_name, output_dir="data/test_images")
-    success, frame, timestamp, filepath = capture.capture_frame()
+    Args:
+        camera_id: Camera identifier
+        output_dir: Output directory for saved frames
+        save: Whether to save the frame
 
-    if success:
-        print("\n✅ Тест успешен! Камера работает корректно.")
-        return True
-    else:
-        print("\n❌ Тест не пройден. Проверьте URL потока.")
-        return False
+    Returns:
+        Tuple of (frame, metadata) or (None, None) on failure
+
+    Example:
+        >>> frame, meta = capture_single_frame("bishkek_panorama")
+        >>> if frame is not None:
+        ...     print(f"Captured: {meta.resolution}")
+    """
+    camera = get_camera(camera_id)
+    if camera is None:
+        logger.error(f"Camera not found: {camera_id}")
+        return None, None
+
+    try:
+        capture = FrameCapture(camera, output_dir=output_dir)
+        return capture.capture(save=save)
+
+    except CaptureError as e:
+        logger.error(f"Capture failed for {camera_id}: {e}")
+        return None, None
+
+
+def capture_all_cameras(
+    output_dir: Union[str, Path] = "data/images",
+    cameras: Optional[Dict[str, Camera]] = None,
+) -> Dict[str, Tuple[Optional[np.ndarray], Optional[FrameMetadata]]]:
+    """
+    Capture frames from all active cameras.
+
+    Args:
+        output_dir: Output directory for saved frames
+        cameras: Optional dict of cameras (defaults to active cameras)
+
+    Returns:
+        Dictionary mapping camera IDs to (frame, metadata) tuples
+
+    Example:
+        >>> results = capture_all_cameras()
+        >>> for cam_id, (frame, meta) in results.items():
+        ...     if meta:
+        ...         print(f"{cam_id}: {meta.resolution}")
+    """
+    if cameras is None:
+        cameras = get_active_cameras()
+
+    results = {}
+    successful = 0
+
+    logger.info(f"Capturing frames from {len(cameras)} cameras")
+
+    for camera_id, camera in cameras.items():
+        try:
+            capture = FrameCapture(camera, output_dir=output_dir)
+            frame, metadata = capture.capture(save=True)
+            results[camera_id] = (frame, metadata)
+            successful += 1
+
+        except CaptureError as e:
+            logger.error(f"Failed to capture {camera_id}: {e}")
+            results[camera_id] = (None, None)
+
+    logger.info(f"Capture complete: {successful}/{len(cameras)} successful")
+
+    return results
+
+
+def main():
+    """Main entry point for frame capture testing."""
+    print("=" * 60)
+    print("AirVision Frame Capture Test")
+    print("=" * 60)
+
+    cameras = get_active_cameras()
+    print(f"\nActive cameras: {len(cameras)}")
+
+    for camera_id, camera in cameras.items():
+        print(f"\n--- Testing {camera_id} ---")
+
+        try:
+            capture = FrameCapture(camera, output_dir="data/test_images")
+            frame, metadata = capture.capture()
+
+            print(f"  Status: SUCCESS")
+            print(f"  Resolution: {metadata.resolution}")
+            print(f"  File: {metadata.filepath}")
+            print(f"  Size: {metadata.file_size_bytes / 1024:.1f} KB")
+
+        except CaptureError as e:
+            print(f"  Status: FAILED - {e}")
+
+    print("\n" + "=" * 60)
 
 
 if __name__ == "__main__":
-    # Тестирование камеры Площадь Ала-Тоо
-    CAMERA_URL = "https://stream.kt.kg:5443/live/camera25.m3u8"
-    CAMERA_NAME = "ala_too_square"
-
-    print("=" * 60)
-    print("ТЕСТИРОВАНИЕ ЗАХВАТА КАДРОВ С КАМЕРЫ")
-    print("=" * 60)
-    print()
-
-    # Сначала тестируем захват одного кадра
-    if test_camera(CAMERA_URL, CAMERA_NAME):
-        print("\n" + "=" * 60)
-        print("Хотите начать непрерывный сбор данных?")
-        print("Раскомментируйте следующие строки и запустите скрипт снова:")
-        print()
-        print("# capture = CameraFrameCapture(CAMERA_URL, CAMERA_NAME)")
-        print("# capture.capture_continuous(interval_minutes=60, duration_hours=24)")
-        print("=" * 60)
-
-        # Раскомментируйте для непрерывного сбора:
-        # capture = CameraFrameCapture(CAMERA_URL, CAMERA_NAME)
-        # capture.capture_continuous(interval_minutes=60, duration_hours=24)
+    main()
