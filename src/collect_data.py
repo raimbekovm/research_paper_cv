@@ -45,8 +45,8 @@ class CollectionConfig:
         interval_minutes: Time between collections
         duration_hours: Total duration (None for infinite)
         daylight_only: Whether to skip nighttime
-        daylight_start: Start hour for daylight (0-23)
-        daylight_end: End hour for daylight (0-23)
+        daylight_start: Start time for daylight (hour, minute)
+        daylight_end: End time for daylight (hour, minute)
         max_workers: Max threads for parallel capture
         jpeg_quality: JPEG compression quality (1-100)
     """
@@ -55,8 +55,8 @@ class CollectionConfig:
     interval_minutes: int = 30
     duration_hours: Optional[int] = None
     daylight_only: bool = True
-    daylight_start: int = 8
-    daylight_end: int = 18
+    daylight_start: tuple = (8, 0)
+    daylight_end: tuple = (18, 30)
     max_workers: int = 5
     jpeg_quality: int = 95
 
@@ -131,8 +131,9 @@ class DataCollector:
 
     def is_daylight(self) -> bool:
         """Check if current time is within daylight hours."""
-        current_hour = datetime.now().hour
-        return self.config.daylight_start <= current_hour < self.config.daylight_end
+        now = datetime.now()
+        current = (now.hour, now.minute)
+        return self.config.daylight_start <= current < self.config.daylight_end
 
     def get_current_cameras(self) -> Dict[str, Camera]:
         """Get appropriate cameras for current time of day."""
@@ -363,7 +364,7 @@ class DataCollector:
         print(f"Interval: {cfg.interval_minutes} minutes")
         print(f"Duration: {cfg.duration_hours or 'infinite'} hours")
         print(f"Output: {cfg.output_dir}")
-        print(f"Daylight hours: {cfg.daylight_start}:00 - {cfg.daylight_end}:00")
+        print(f"Daylight hours: {cfg.daylight_start[0]:02d}:{cfg.daylight_start[1]:02d} - {cfg.daylight_end[0]:02d}:{cfg.daylight_end[1]:02d}")
         print(f"PM2.5 + Weather: enabled")
         print("=" * 80)
 
@@ -477,15 +478,15 @@ Examples:
     )
     parser.add_argument(
         "--daylight-start",
-        type=int,
-        default=8,
-        help="Daylight start hour (default: 8)",
+        type=str,
+        default="8:00",
+        help="Daylight start time HH:MM (default: 8:00)",
     )
     parser.add_argument(
         "--daylight-end",
-        type=int,
-        default=18,
-        help="Daylight end hour (default: 18)",
+        type=str,
+        default="18:30",
+        help="Daylight end time HH:MM (default: 18:30)",
     )
     parser.add_argument(
         "--24-7",
@@ -511,14 +512,19 @@ Examples:
         cameras = get_active_cameras()
         print("Using recommended cameras only")
 
+    # Parse daylight times (HH:MM format)
+    def parse_time(s: str) -> tuple:
+        parts = s.split(":")
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+
     # Create config
     config = CollectionConfig(
         output_dir=Path(args.output),
         interval_minutes=args.interval,
         duration_hours=args.duration,
         daylight_only=not args.all_day,
-        daylight_start=args.daylight_start,
-        daylight_end=args.daylight_end,
+        daylight_start=parse_time(args.daylight_start),
+        daylight_end=parse_time(args.daylight_end),
     )
 
     # Create collector
@@ -526,7 +532,7 @@ Examples:
 
     if args.mode == "test":
         print("\nTEST MODE - Single capture\n")
-        results = collector.collect_once()
+        results, env_data = collector.collect_once()
 
         print("\nResults:")
         for r in results:

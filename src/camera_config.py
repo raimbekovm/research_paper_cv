@@ -174,7 +174,7 @@ class CameraRegistry:
             ),
         ))
 
-        # KT Center - SUPPLEMENTARY camera (rotating, daytime only)
+        # KT Center - EXCLUDED (rotating PTZ, inconsistent framing)
         self._register(Camera(
             id="kt_center",
             name="Kyrgyztelecom Center",
@@ -186,17 +186,18 @@ class CameraRegistry:
                 viewing_angle=ViewingAngle.ROTATING,
             ),
             quality=CameraQualityMetrics(
-                visual_quality_score=7,
+                visual_quality_score=4,
                 sky_coverage_percent=30,
                 depth_of_field_km=3.0,
                 pm25_sensor_distance_km=0.01,
                 nearest_sensor="US Embassy Bishkek",
             ),
-            recommended=True,
+            recommended=False,
             require_quality_filter=True,
             description=(
-                "Rotating camera requiring frame quality filtering (~75% acceptance rate). "
-                "Closest to PM2.5 sensor (10m). Mountains visible but many nearby buildings."
+                "Excluded: rotating PTZ camera with inconsistent framing. "
+                "~30-40% of frames show close-up street views (buses, roads) "
+                "with no sky or horizon — uninformative for PM2.5 estimation."
             ),
         ))
 
